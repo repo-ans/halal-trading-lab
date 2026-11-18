@@ -5,6 +5,12 @@ from functools import lru_cache
 
 import pandas_market_calendars as mcal
 
+# MIC code -> pandas_market_calendars calendar name. The single source of truth for
+# this mapping -- backfill.py and the /instruments routes both import it from here
+# rather than each keeping their own copy. Only the exchanges app/seed/instruments.json
+# actually uses.
+EXCHANGE_CALENDARS = {"XNAS": "NASDAQ", "XNYS": "NYSE", "XTSE": "XTSE"}
+
 
 @lru_cache
 def _get_calendar(calendar: str):
@@ -23,3 +29,11 @@ def session_bounds(day: date, calendar: str = "NYSE") -> tuple[datetime, datetim
     row = sched.iloc[0]
     return (row["market_open"].to_pydatetime().astimezone(timezone.utc),
             row["market_close"].to_pydatetime().astimezone(timezone.utc))
+
+
+def exchange_timezone(calendar: str) -> str:
+    """The IANA timezone name (e.g. "America/New_York") for a calendar name -- the
+    single place this mapping lives, so the frontend never hardcodes exchange ->
+    timezone (CLAUDE.md section 8: convert at the display layer only, from one
+    source of truth)."""
+    return str(_get_calendar(calendar).tz)

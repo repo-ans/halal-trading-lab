@@ -318,7 +318,7 @@ interpolate, or fall back to the last known price to keep a run alive.
 | Stage | Scope | Status |
 |---|---|---|
 | A | Repo, Docker Compose, migrations, login, README | Done (live-verified 2026-11-18) |
-| B | Provider adapter, backfill, data validation, charts | B1 (backend pipeline, no charts) done 2026-11-18; charts not started |
+| B | Provider adapter, backfill, data validation, charts | Done 2026-11-18 (B1 backend pipeline + B2 instruments/bars API and chart UI) |
 | C | Compliance form, evidence, expiry, order blocking | Not started |
 | D | 5/20 MA strategy, next-bar execution, deterministic | Not started |
 | E | Paper engine: cash ledger, positions, fills, EOD exit, costs | Not started |

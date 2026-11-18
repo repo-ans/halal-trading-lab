@@ -1,4 +1,4 @@
-# Handover — Stage A + B1 done (18 Nov 2026)
+# Handover — Stage A + B done (18 Nov 2026)
 
 Read `CLAUDE.md` first (decisions, rejected options, legal constraints). This file
 records what was built on top of it and what is still pending.
@@ -10,8 +10,8 @@ records what was built on top of it and what is still pending.
   with a real Supabase Auth session.
 - **Stage B1 (backend data pipeline, no charts): done 2026-11-18, including two
   hardening passes and one real run against production.** See below.
-- **Stage B2 (charts) is next; plan pending owner approval before any file is created.
-  The rest of Stage B/C onward: not started.**
+- **Stage B2 (instruments/bars API + chart UI): done 2026-11-18.** See below.
+- **Stage C onward: not started.**
 
 ## What exists
 ```
@@ -323,6 +323,73 @@ Owner review of B1 required several additions before accepting it, then a real r
   `seed_instruments()` script; new symbols get no compliance record and stay blocked
   until Stage C, or a direct `compliance_checks` row, adds one).
 - Full suite, both markers: 81 passed, 7 xfailed, 0 skipped, 0 failed.
+
+## Stage B2: instruments/bars API + chart UI (18 Nov 2026)
+**Backend**
+- `app/routes/instruments.py` (new `app/routes/` package): `GET /instruments` (JWT
+  required) returns `id, symbol, exchange, currency, timezone, latest_bar_ts, bar_count,
+  compliance: null`. `GET /instruments/{id}/bars?from=&to=&interval=5m` (JWT required)
+  returns bars ascending by `ts`, `ts` as epoch seconds UTC, `open/high/low/close` as
+  Decimal **strings** (`str(r.open)`, never a float conversion), `volume`/`source` as
+  given. 422 for `from >= to`, an unsupported `interval`, or a range whose row **count**
+  (checked before the full `SELECT`, never a truncated response) exceeds the 5000-bar
+  cap. Unknown `instrument_id` → 404.
+- `app/market_calendar.py` gained `EXCHANGE_CALENDARS` (moved out of `backfill.py`,
+  which now imports it instead of keeping its own private copy -- one source of truth
+  for MIC → calendar name) and `exchange_timezone(calendar) -> str`, which reads the
+  IANA name straight off the `pandas_market_calendars` `Calendar.tz` attribute. The
+  frontend never hardcodes exchange → timezone; it's in exactly one place.
+- Both routes declare `user: AuthUser = Depends(current_user)` **before**
+  `session: Session = Depends(get_session)` -- confirmed by test (a missing/bad JWT
+  returns 401 without ever touching the DB, including in tests that don't override
+  `get_session` at all).
+- Tests (`test_instruments_route.py`, DB-writing via `db_conn`/`RUN_DB_TESTS=1`):
+  401 without JWT (both routes), ordering, timezone per exchange (XNAS/XNYS →
+  `America/New_York`, XTSE → `America/Toronto`), null/zero for an instrument with no
+  bars, Decimal-as-string, the 5000 cap (monkeypatched down to 1 to actually exercise
+  the 422 path without seeding 5001 real rows), 404 for an unknown instrument.
+  **Gotcha hit and fixed while writing these:** a `lambda: iter([db_conn])` override
+  for `get_session` doesn't work -- FastAPI decides whether to advance a dependency
+  with `next()` by inspecting the *callable* (`inspect.isgeneratorfunction`), not its
+  return value, so the raw iterator was passed straight into the route instead of the
+  session it would yield. Fixed by overriding with an actual generator function.
+
+**Frontend**
+- `lightweight-charts@5.3.0` installed; `Chart.tsx` uses the real v5 API confirmed by
+  reading the installed package's own `dist/typings.d.ts` (not assumed from memory):
+  `chart.addSeries(CandlestickSeries, {})` and `chart.addSeries(HistogramSeries, {...},
+  1)` (pane index 1 -- its own pane below the candles, not overlaid). `CandlestickSeries`
+  /`HistogramSeries` are value exports, not strings. Time values are `UTCTimestamp`, a
+  branded `number` requiring an explicit cast.
+- `lib/time.ts`: `formatBarTime`/`formatBarDate`, pure functions wrapping
+  `Intl.DateTimeFormat` with an IANA `timeZone` -- used as the chart's
+  `timeScale.tickMarkFormatter` and `localization.timeFormatter`. The underlying
+  epoch-seconds data is never shifted; only these formatters change what clock time it
+  displays as.
+- `lib/api.ts::fetchAllBars`: the "ALL" range button fetches in sequential ≤50-
+  calendar-day windows (conservatively ≤ ~3900 bars each, under the owner-specified
+  4000 target) and concatenates, so it keeps working as data accumulates for months —
+  never hits the server's 5000-bar cap. Stops after 2 consecutive empty windows or a
+  60-window safety cap. `InstrumentChart.tsx` shows a "Loading all history..." label
+  while it's in flight (`query.isFetching`).
+- UI: `Instruments.tsx` (list, click → chart) and `InstrumentChart.tsx` (range buttons
+  1D/5D/ALL, UTC toggle via the backend-provided `timezone`, dev-data banner when any
+  loaded bar has `source === "yfinance"`, no MA overlay). No router added — `App.tsx`
+  swaps between the two pages with local `useState`, per the owner's instruction.
+  `Disclaimer` stays mounted at the `App.tsx` top level, so it's on every screen
+  without each page needing to remember it.
+- `vitest@3.2.7` added (frontend had no test runner before this). One test file,
+  `lib/time.test.ts`: a bar from 2026-10-15 (EDT) and one from 2026-11-16 (EST) both
+  render as `09:30` in `America/New_York` and as their actual distinct UTC clock times
+  (`13:30`/`14:30`) in `UTC` -- proves the formatter is DST-correct and that the
+  underlying timestamp is never shifted, only the display.
+- `npm run build` (tsc typecheck + vite build) and `npm run test` (vitest) both pass.
+  Bundle is ~587 kB minified (173 kB gzipped), over Vite's 500 kB chunk-size warning
+  threshold, due to `lightweight-charts` — not addressed (code-splitting), not asked
+  for, flagging as a known note.
+- `npm audit` on the frontend now shows 8 findings (was 2), from `vitest`'s own
+  transitive dev dependencies, not from anything shipped in the app bundle. Not fixed,
+  same "owner hasn't decided" status as the pre-existing 2.
 
 ## Open items / notes
 - `npm audit`: 2 findings (esbuild/vite 5.x, dev-server only). Fix = major vite upgrade;

@@ -4,8 +4,8 @@ Practise day trading with **virtual money** on a human-approved halal watchlist.
 Paper trading only. Not financial advice. Halal status comes from a third party, not
 from this app. See [CLAUDE.md](CLAUDE.md) for scope and decisions.
 
-Status: **Stage A + B1 done** (scaffold, schema, auth, backend data pipeline). See
-[docs/HANDOVER.md](docs/HANDOVER.md) for details.
+Status: **Stage A + B done** (scaffold, schema, auth, backend data pipeline,
+instruments/bars API, chart UI). See [docs/HANDOVER.md](docs/HANDOVER.md) for details.
 
 ## Prerequisites
 - Python 3.12, Node 20+, Docker (optional)
@@ -90,11 +90,11 @@ Instruments are seeded from `backend/app/seed/instruments.json`, never hardcoded
 {"symbol": "AAPL", "exchange": "XNAS", "currency": "USD", "name": "Apple Inc."}
 ```
 - `exchange` is the MIC code. Currently supported (both `YFinanceProvider`'s ticker
-  mapping and the backfill service's market-calendar mapping need an entry for any
-  new exchange): `XNAS`/`XNYS` (US, no ticker suffix) and `XTSE` (Toronto, `.TO`
-  suffix). Adding a new exchange means adding it to `_EXCHANGE_SUFFIX` in
-  `app/providers/price/yfinance_provider.py` and `_CALENDAR_FOR_EXCHANGE` in
-  `app/services/backfill.py` first.
+  mapping and the market-calendar mapping need an entry for any new exchange):
+  `XNAS`/`XNYS` (US, no ticker suffix) and `XTSE` (Toronto, `.TO` suffix). Adding a
+  new exchange means adding it to `_EXCHANGE_SUFFIX` in
+  `app/providers/price/yfinance_provider.py` and `EXCHANGE_CALENDARS` in
+  `app/market_calendar.py` first.
 - To add symbols: edit `instruments.json` (append entries, don't remove existing
   ones), then re-seed. Seeding is idempotent (upserts on `symbol, exchange`) and
   touches **only** the `instruments` table.

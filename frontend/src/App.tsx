@@ -2,31 +2,37 @@ import type { Session } from "@supabase/supabase-js";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import Disclaimer from "./components/Disclaimer";
-import { API_URL, supabase } from "./lib/supabase";
+import { apiFetch } from "./lib/api";
+import { supabase } from "./lib/supabase";
+import InstrumentChart from "./pages/InstrumentChart";
+import Instruments from "./pages/Instruments";
 import Login from "./pages/Login";
+import type { Instrument } from "./types";
 
 function Home({ session }: { session: Session }) {
   const me = useQuery({
     queryKey: ["me"],
-    queryFn: async () => {
-      const res = await fetch(`${API_URL}/me`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      if (!res.ok) throw new Error(`API ${res.status}`);
-      return (await res.json()) as { id: string; email: string | null };
-    },
+    queryFn: () => apiFetch<{ id: string; email: string | null }>("/me", session.access_token),
   });
+  const [selected, setSelected] = useState<Instrument | null>(null);
 
   return (
     <div>
-      <h1>Halal Trading Lab</h1>
-      <p>
-        {me.isLoading && "Checking session with API..."}
-        {me.isError && `API error: ${(me.error as Error).message}`}
-        {me.data && `Signed in as ${me.data.email ?? me.data.id}`}
-      </p>
-      <p>Stage A scaffold. Screens arrive in later stages.</p>
-      <button onClick={() => supabase.auth.signOut()}>Sign out</button>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <h1>Halal Trading Lab</h1>
+        <div style={{ fontSize: 13, color: "#555" }}>
+          {me.isLoading && "Checking session with API..."}
+          {me.isError && `API error: ${(me.error as Error).message}`}
+          {me.data && `Signed in as ${me.data.email ?? me.data.id}`}{" "}
+          <button onClick={() => supabase.auth.signOut()}>Sign out</button>
+        </div>
+      </div>
+
+      {selected ? (
+        <InstrumentChart session={session} instrument={selected} onBack={() => setSelected(null)} />
+      ) : (
+        <Instruments session={session} onSelect={setSelected} />
+      )}
     </div>
   );
 }

@@ -11,6 +11,7 @@ from decimal import Decimal
 
 from app.auth import AuthUser, current_user
 from app.config import get_settings
+from app.routes.instruments import router as instruments_router
 from app.scheduler import create_scheduler, run_backfill_job
 from app.services.backfill import BackfillReport
 
@@ -53,6 +54,9 @@ def health() -> dict:
 @app.get("/me")
 def me(user: AuthUser = Depends(current_user)) -> dict:
     return {"id": str(user.id), "email": user.email}
+
+
+app.include_router(instruments_router)
 
 
 def get_backfill_runner() -> Callable[[], BackfillReport | None]:
