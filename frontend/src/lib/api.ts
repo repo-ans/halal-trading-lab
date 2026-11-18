@@ -96,6 +96,18 @@ export function fetchWatchlist(token: string): Promise<WatchlistRow[]> {
   return apiFetch<WatchlistRow[]>("/watchlist", token);
 }
 
+export interface AppConfig {
+  app_mode: "production" | "demo";
+}
+
+// Unauthenticated -- same tier as /health. Needs to work before sign-in so the
+// demo banner can render on the login screen too.
+export async function fetchConfig(): Promise<AppConfig> {
+  const res = await fetch(`${API_URL}/config`);
+  if (!res.ok) throw await _errorFor(res);
+  return (await res.json()) as AppConfig;
+}
+
 export interface ComplianceInput {
   instrument_id: number;
   status: ComplianceStatus;

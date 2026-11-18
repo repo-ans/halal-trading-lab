@@ -4,8 +4,9 @@ Practise day trading with **virtual money** on a human-approved halal watchlist.
 Paper trading only. Not financial advice. Halal status comes from a third party, not
 from this app. See [CLAUDE.md](CLAUDE.md) for scope and decisions.
 
-Status: **Stage A + B done** (scaffold, schema, auth, backend data pipeline,
-instruments/bars API, chart UI). See [docs/HANDOVER.md](docs/HANDOVER.md) for details.
+Status: **Stage A + B + C + D done** (scaffold, schema, auth, backend data pipeline,
+instruments/bars API, chart UI, compliance gate + watchlist, 5/20 MA signal engine).
+See [docs/HANDOVER.md](docs/HANDOVER.md) for details.
 
 ## Prerequisites
 - Python 3.12, Node 20+, Docker (optional)
@@ -22,6 +23,7 @@ Copy `.env.example` to `.env` at the repo root, and the `VITE_*` values to
 | `SUPABASE_JWT_SECRET` | backend | Optional; only for legacy HS256 projects |
 | `CORS_ORIGINS` | backend | Allowed browser origins, comma-separated |
 | `APP_ENV` | backend | `development` / `production` |
+| `APP_MODE` | backend | `production` (default) / `demo` -- see "Demo environment" below |
 | `TEST_DATABASE_URL` | backend tests | Local throwaway Postgres for DB-writing tests; defaults to `db_test` below, usually leave unset |
 | `ALLOW_DEV_DATA_SOURCE` | backend | Must be `true` for `YFinanceProvider` to run at all (dev-only, CLAUDE.md §3) |
 | `JOB_SECRET` | backend | Shared secret for `POST /jobs/backfill`'s `X-Job-Secret` header; empty disables the endpoint (503) |
@@ -119,3 +121,60 @@ deliberately never touches `compliance_checks` -- a missing record means the pap
 engine refuses to trade it (CLAUDE.md §5, a must-pass test). A new symbol, including
 from the CEO's candidate list, stays blocked until a human adds a compliance record
 through the Stage C admin flow (not built yet) or directly in `compliance_checks`.
+
+## Demo environment
+
+An isolated local database, separate from Supabase, so Stages E-G can be built and
+demoed end-to-end without ever writing a fixture compliance record to production.
+It is seeded with the real instruments (AAPL/MSFT/KO/RY -- these get **no**
+compliance record, so they show "no_record") plus 6 synthetic `DEMO-*`
+instruments, each carrying one arbitrary, clearly-labelled fixture status that
+exercises every compliance gate branch. See CLAUDE.md for the exact mapping and
+why no real company is ever assigned a fixture status.
+
+`app/demo_mode.py` enforces, in both directions, that `APP_MODE=demo` can only ever
+point at `localhost`/`127.0.0.1`:`5434`/`halal_demo`, and that any other `APP_MODE`
+refuses to run against a database literally named `halal_demo`. The backend server
+and `scripts/seed_demo.py` both call the exact same function.
+
+**Start it (PowerShell):**
+```powershell
+# 1. Start the demo database (persists across restarts -- a named volume, not tmpfs)
+docker compose --profile demo up -d db_demo
+
+# 2. Seed it once (migrates, seeds real instruments with no compliance record,
+#    creates the 6 DEMO-* fixtures, copies bars from production read-only).
+#    SOURCE_DATABASE_URL is production's DATABASE_URL -- set it, or leave it unset
+#    to be prompted (hidden input, never a CLI argument / shell history).
+cd backend
+$env:APP_MODE = "demo"
+$env:DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5434/halal_demo"
+$env:SOURCE_DATABASE_URL = "<production DATABASE_URL>"   # optional; omit to be prompted
+python scripts/seed_demo.py
+
+# 3. Run the backend against the demo database (same env vars -- they override
+#    .env, which is why step 2's $env: assignments are enough on their own)
+uvicorn app.main:app --reload
+
+# 4. Frontend, same as usual, pointed at this backend
+cd ../frontend
+npm run dev
+```
+Every screen shows a red "DEMO ENVIRONMENT" banner and `[DEMO]` in the browser tab
+title (`GET /config` -> `{"app_mode": "demo"}`, checked before sign-in too). The
+scheduler and the startup/`/jobs/backfill` collector are both disabled in demo mode
+-- the data is a static, hand-seeded fixture, there is nothing to re-fetch.
+
+**Fixture dates decay.** `DEMO-SOON`/`DEMO-EXPIRED`'s expiry dates are computed
+relative to "now" at the moment `seed_demo.py` runs, so "expires within 14 days"
+and "already expired" will eventually drift (e.g. `DEMO-SOON` will itself become
+expired after enough real days pass). Re-run `seed_demo.py` to refresh them.
+
+**Resetting the demo database** (scoped -- never `docker compose down -v`, which
+would remove every volume in this compose file, not just this one):
+```powershell
+docker compose --profile demo stop db_demo
+docker compose --profile demo rm -f db_demo
+docker volume rm halal-trading-lab_demo_pgdata
+docker compose --profile demo up -d db_demo   # fresh, empty -- re-run seed_demo.py
+```

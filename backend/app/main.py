@@ -11,6 +11,7 @@ from decimal import Decimal
 
 from app.auth import AuthUser, current_user, is_admin
 from app.config import get_settings
+from app.demo_mode import assert_demo_db_is_safe
 from app.routes.compliance import router as compliance_router
 from app.routes.instruments import router as instruments_router
 from app.routes.strategy_runs import router as strategy_runs_router
@@ -23,9 +24,24 @@ from app.services.backfill import BackfillReport
 # InstrumentReport.recent_session_gap_pct).
 RECENT_GAP_FAIL_THRESHOLD = Decimal("10")
 
+# Before anything else: a demo server must never be able to point at a non-local
+# database, and a non-demo server must never be able to point at the demo one.
+# This runs at IMPORT time, before the FastAPI app even exists, so a
+# misconfigured process never starts serving (app/demo_mode.py).
+assert_demo_db_is_safe(get_settings())
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # The demo environment is a static, hand-seeded fixture (scripts/seed_demo.py)
+    # -- no scheduler, no startup backfill. Running either against it would try
+    # to fetch real market data for symbols seed_demo.py invented (the DEMO-*
+    # instruments have no real ticker), and would pointlessly touch the
+    # yfinance/EODHD rate limit for the real ones.
+    if get_settings().app_mode == "demo":
+        yield
+        return
+
     scheduler = create_scheduler()
     scheduler.start()
     # Fire-and-forget: run once on startup without blocking the app from serving
@@ -52,6 +68,13 @@ app.add_middleware(
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/config")
+def config() -> dict:
+    """Unauthenticated, same tier as /health -- the frontend needs this before
+    sign-in to render the demo banner on the login screen too."""
+    return {"app_mode": get_settings().app_mode}
 
 
 @app.get("/me")
@@ -100,6 +123,10 @@ def trigger_backfill(
     x_job_secret: str | None = Header(default=None),
     runner: Callable[[], BackfillReport | None] = Depends(get_backfill_runner),
 ) -> JSONResponse:
+    if get_settings().app_mode == "demo":
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "backfill is disabled in demo mode (static, hand-seeded fixtures)")
+
     secret = get_settings().job_secret
     if not secret:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -25,3 +25,23 @@ services:
       - "5433:5432"
     tmpfs:
       - /var/lib/postgresql/data
+
+  # The isolated demo environment (CLAUDE.md, app/demo_mode.py): a local,
+  # PERSISTENT database -- unlike db_test's tmpfs, this one is meant to survive
+  # restarts between demos. Gated behind "demo" so `docker compose up` never
+  # starts it either. scripts/seed_demo.py seeds it; it never receives real
+  # compliance data, only fixtures.
+  db_demo:
+    image: postgres:17-alpine
+    profiles: ["demo"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: halal_demo
+    ports:
+      - "5434:5432"
+    volumes:
+      - demo_pgdata:/var/lib/postgresql/data
+
+volumes:
+  demo_pgdata:

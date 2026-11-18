@@ -1,6 +1,7 @@
 import type { Session } from "@supabase/supabase-js";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import DemoBanner from "./components/DemoBanner";
 import Disclaimer from "./components/Disclaimer";
 import { apiFetch } from "./lib/api";
 import { supabase } from "./lib/supabase";
@@ -53,9 +54,12 @@ export default function App() {
 
   if (!ready) return null;
   return (
-    <main style={{ fontFamily: "system-ui", padding: 24 }}>
-      {session ? <Home session={session} /> : <Login />}
-      <Disclaimer />
-    </main>
+    <>
+      <DemoBanner />
+      <main style={{ fontFamily: "system-ui", padding: 24 }}>
+        {session ? <Home session={session} /> : <Login />}
+        <Disclaimer />
+      </main>
+    </>
   );
 }

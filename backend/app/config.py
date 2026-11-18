@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -6,6 +7,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # "demo" is an isolated local environment seeded with fixture compliance
+    # records (scripts/seed_demo.py) -- app/demo_mode.py enforces it can never
+    # point at a non-local database, and vice versa. An invalid value fails
+    # at startup (pydantic Literal validation), fail closed like the rest of
+    # this class.
+    app_mode: Literal["production", "demo"] = "production"
     database_url: str
     # The throwaway local Postgres (docker-compose service db_test, profile "test")
     # that DB-writing tests run against. Never the production project -- conftest.py

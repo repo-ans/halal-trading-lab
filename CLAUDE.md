@@ -228,6 +228,36 @@ transaction as the new row's INSERT, in that order). Writes are admin-only
 means NO ONE is admin**, fail closed, never "everyone"). Reads (`GET /watchlist`) are
 open to any authenticated user.
 
+### Demo environment fixtures — never a real ruling, never a real symbol
+
+`scripts/seed_demo.py` (`app/demo_mode.py` enforces `APP_MODE=demo` can only ever
+point at an isolated local database — see §12-adjacent README section "Demo
+environment") seeds 6 **synthetic** instruments, never the 4 real ones, so that no
+real company is ever labelled with any compliance status, even an obviously-fake
+one:
+
+| Symbol | Status | Notes |
+|---|---|---|
+| `DEMO-OK` | `halal`, valid | far from expiry |
+| `DEMO-SOON` | `halal`, expires within 14 days | exercises the amber watchlist badge |
+| `DEMO-EXPIRED` | `halal`, already expired | exercises the `expired` gate reason |
+| `DEMO-NOTHALAL` | `not_halal` | |
+| `DEMO-DOUBTFUL` | `doubtful` | |
+| `DEMO-NOCOVER` | `not_covered` | |
+
+The 4 real symbols (AAPL/MSFT/KO/RY) get **no** compliance record in the demo
+database either — they show `no_record`, same as any newly-seeded symbol in
+production. Every fixture's `notes` starts `"DEMO FIXTURE, NOT A RULING"`,
+`evidence_url` is `https://example.invalid/demo-fixture`, and `created_by` is a
+fixed nil UUID — unmistakable on inspection, backed up by the red "DEMO
+ENVIRONMENT" banner the frontend shows on every screen (`GET /config`) whenever
+`app_mode == "demo"`.
+
+**Demo fixtures are never used for any real symbol outside `APP_MODE=demo`.** Real
+compliance records enter production only through the admin form or the CSV import
+(both above), after a human has verified the status against Zoya/Musaffa evidence
+— never through this script, never inferred by the app itself.
+
 ---
 
 ## 6. Database schema — 8 tables
@@ -446,7 +476,7 @@ interpolate, or fall back to the last known price to keep a run alive.
 | E | Paper engine: cash ledger, positions, fills, EOD exit, costs | Not started |
 | F | Dashboard: watchlist, results, trade history, CSV export | Not started |
 | G | AI review — plain-language summaries from computed metrics only | Not started |
-| H | Automated tests, security checks, demo data, licence check | Not started |
+| H | Automated tests, security checks, demo data, licence check | Demo data done 2026-11-18 (ahead of schedule, built between D and E so E-G can be demoed in isolation — see §5's "Demo environment fixtures" and the README); tests/security/licence check not started |
 
 Target milestones: wk 1 requirements + provider decision · wk 2 watchlist +
 compliance · wk 3–4 backtest engine, ledger, dashboard · wk 5 testing + AI

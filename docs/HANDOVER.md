@@ -15,6 +15,8 @@ records what was built on top of it and what is still pending.
   2026-11-18.** See below.
 - **Stage D (signal generation: 5/20 MA cross engine, next-bar execution, replay):
   done 2026-11-18.** Signals only -- no cash, sizing, fills, or orders. See below.
+- **Demo environment (isolated local DB + fixture compliance data, part of Stage
+  H's scope done ahead of schedule): done 2026-11-18.** See below.
 - **Stage E onward: not started.**
 
 ## What exists
@@ -547,6 +549,85 @@ compliant/blocked/currency-mismatch/unknown-instrument/replay-after-expiry),
 (determinism) stays xfail until Stage E adds fills to the same guarantee. Full
 backend suite: 192 passed, 1 skipped (opt-in live RLS check), 4 xfailed (Stage E),
 0 failed.
+
+**Follow-up fix (same day):** `scripts/preview_signals.py` originally computed its
+own simplified rolling-mean MA for display, independent of the real engine -- it
+silently ignored `reset_ma_each_session` entirely (both modes rendered identical
+MAs). Fixed by adding `compute_ma_series` to `app/services/strategy.py`, sharing
+the exact same window-building code (`_complete_window`) `generate_signals` uses,
+evaluated independently per period so `ma_fast` can warm up before `ma_slow`. Two
+tests added proving the preview can never diverge from the engine again.
+
+## Demo environment: isolated DB + fixture compliance data (18 Nov 2026)
+
+Built between Stage D and Stage E specifically so E-G can be built and demoed
+end-to-end without ever writing a fixture compliance record to production. Counts
+as Stage H's "demo data" item, done ahead of schedule.
+
+**Isolation, enforced in both directions** (`app/demo_mode.py::assert_demo_db_is_safe`,
+called by both `app/main.py` at import time -- before the FastAPI app object even
+exists -- and `scripts/seed_demo.py` before touching its target connection):
+`APP_MODE=demo` requires `DATABASE_URL` to be exactly
+`localhost`/`127.0.0.1`:`5434`/`halal_demo`; any other `APP_MODE` refuses to run if
+`DATABASE_URL`'s database name is literally `halal_demo`. One function, both
+directions, both callers -- it can't drift between them.
+
+**`docker-compose.yml`**: `db_demo` (profile `"demo"`, so a plain `docker compose up`
+never starts it either) -- unlike `db_test`'s `tmpfs`, this one uses a **named
+volume** (`demo_pgdata`) so it survives restarts between demos.
+
+**`scripts/seed_demo.py`**: migrates the demo DB, seeds the 4 real instruments
+(AAPL/MSFT/KO/RY) with **no** compliance record (same as any newly-seeded real
+symbol -- they show `no_record`), creates 6 synthetic `DEMO-*` instruments, and
+copies 5-minute bars into all of them from production over a read-only connection
+(`app/db.py::read_only_session`, `SET TRANSACTION READ ONLY` as its first
+statement -- same idiom `preview_signals.py` uses, now shared rather than
+duplicated). The production URL comes from `SOURCE_DATABASE_URL` in the
+environment, or a hidden `getpass` prompt -- deliberately never a CLI argument, so
+it can't end up in shell history. Refuses outright (before any write) if: the
+guard above fails; source and target resolve to the same host+port+database; or
+the target already has a `compliance_checks` row whose `notes` doesn't start with
+`"DEMO FIXTURE, NOT A RULING"` (i.e. it doesn't look like a fresh demo database).
+
+**Fixtures, via the real `create_compliance_check()`** (same append-only / one-
+current-row guarantees as production -- not reinvented): every status the gate can
+return, but **never on a real company** -- `DEMO-OK` (halal, valid), `DEMO-SOON`
+(halal, expires within 14 days -- exercises the watchlist's amber badge),
+`DEMO-EXPIRED` (halal, already expired), `DEMO-NOTHALAL`, `DEMO-DOUBTFUL`,
+`DEMO-NOCOVER`. Bars: `DEMO-OK`/`DEMO-DOUBTFUL` <- AAPL, `DEMO-SOON`/`DEMO-NOCOVER`
+<- MSFT, `DEMO-EXPIRED` <- KO, `DEMO-NOTHALAL` <- RY, original `source` tag kept
+(never overwritten). Every fixture's dates are computed from `now` at seed time
+(so they decay -- see README) and run through the SAME `validate_new_check()` the
+admin route calls; if it had ever rejected one, the script stops rather than
+inserting directly (none do -- a dedicated test proves it for all 6 as shipped).
+
+**Server wiring** (`app/main.py`): in demo mode, `lifespan` skips creating the
+APScheduler and the startup backfill task entirely -- the data is static and
+hand-seeded, there's nothing to re-fetch, and the `DEMO-*` symbols have no real
+ticker to fetch anyway. `POST /jobs/backfill` refuses with 503 before even
+checking `JOB_SECRET`. `GET /config` (unauthenticated, same tier as `/health`)
+reports `app_mode` for the frontend.
+
+**Frontend**: `DemoBanner.tsx` polls `/config` and renders a red
+"DEMO ENVIRONMENT" banner above everything (including the login screen, since it
+mounts outside the signed-in/signed-out branch in `App.tsx`), and prefixes
+`document.title` with `[DEMO]` while demo mode is active.
+
+**Tests** (`test_demo_mode.py`, 21): the guard in both directions (5 demo-mode
+cases, 2 production-mode cases, 1 invalid-`APP_MODE` rejection), `lifespan` skips
+vs. starts the scheduler, the backfill route's demo refusal, `GET /config`, the
+seed script's guard-first ordering, same-database and non-demo-data refusals
+(DB-writing), the "stop instead of bypassing validation" path, and -- replacing an
+earlier MagicMock-only version -- a **real** read-only-transaction test: opens
+`read_only_session` against `db_test`, attempts an INSERT, and asserts it raises
+with `.orig` being `psycopg.errors.ReadOnlySqlTransaction`, not a mocked stand-in.
+Verified end-to-end against real production data as the source: seeded `db_demo`,
+confirmed every instrument's `effective_status` via the real gate function (4 real
+symbols -> `no_record`; the 6 fixtures -> `ok` x2, `expired`, `not_halal`,
+`doubtful`, `not_covered`), started the backend in demo mode and confirmed
+`/config` reports `demo`, `/jobs/backfill` returns 503, and the startup log shows
+no scheduler activity. `db_demo` stopped (container only -- the named volume
+persists, per CLAUDE.md/README's documented reset procedure) when finished.
 
 ## Open items / notes
 - **Stage C was never actually committed.** `git add` + the secret-scan checks were
