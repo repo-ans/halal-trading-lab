@@ -11,12 +11,11 @@ from app.auth import AuthUser, current_user
 from app.db import get_session
 from app.market_calendar import EXCHANGE_CALENDARS, exchange_timezone
 from app.models.instrument import Instrument
-from app.models.price_bar import PriceBar
+from app.models.price_bar import SUPPORTED_INTERVAL, PriceBar
 
 router = APIRouter()
 
 MAX_BARS_PER_REQUEST = 5000
-SUPPORTED_INTERVAL = "5m"
 
 
 class InstrumentOut(BaseModel):

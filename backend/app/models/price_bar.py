@@ -6,6 +6,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, Money, UTCDateTime, pk_column
 
+# The only interval the app stores or serves. Single source of truth -- routes and
+# services import this rather than each keeping their own "5m" literal.
+SUPPORTED_INTERVAL = "5m"
+
 
 class PriceBar(Base):
     __tablename__ = "price_bars"

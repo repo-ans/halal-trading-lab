@@ -9,9 +9,12 @@ from fastapi.responses import JSONResponse
 
 from decimal import Decimal
 
-from app.auth import AuthUser, current_user
+from app.auth import AuthUser, current_user, is_admin
 from app.config import get_settings
+from app.routes.compliance import router as compliance_router
 from app.routes.instruments import router as instruments_router
+from app.routes.strategy_runs import router as strategy_runs_router
+from app.routes.watchlist import router as watchlist_router
 from app.scheduler import create_scheduler, run_backfill_job
 from app.services.backfill import BackfillReport
 
@@ -53,10 +56,13 @@ def health() -> dict:
 
 @app.get("/me")
 def me(user: AuthUser = Depends(current_user)) -> dict:
-    return {"id": str(user.id), "email": user.email}
+    return {"id": str(user.id), "email": user.email, "is_admin": is_admin(user)}
 
 
 app.include_router(instruments_router)
+app.include_router(compliance_router)
+app.include_router(watchlist_router)
+app.include_router(strategy_runs_router)
 
 
 def get_backfill_runner() -> Callable[[], BackfillReport | None]:

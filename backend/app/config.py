@@ -23,9 +23,19 @@ class Settings(BaseSettings):
     # requests with 503, never falls back to "no auth required".
     job_secret: str = ""
 
+    # Comma-separated Supabase auth user UUIDs. Empty/unset means NO ONE is an admin
+    # (fail closed) -- never treat an unset list as "everyone" or "no restriction".
+    admin_user_ids: str = ""
+    # UNCONFIRMED ASSUMPTION (CLAUDE.md section 5): 90 days, owner has not confirmed.
+    compliance_default_validity_days: int = 90
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def admin_user_id_set(self) -> set[str]:
+        return {u.strip().lower() for u in self.admin_user_ids.split(",") if u.strip()}
 
 
 @lru_cache

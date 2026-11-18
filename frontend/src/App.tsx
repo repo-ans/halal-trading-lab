@@ -5,14 +5,15 @@ import Disclaimer from "./components/Disclaimer";
 import { apiFetch } from "./lib/api";
 import { supabase } from "./lib/supabase";
 import InstrumentChart from "./pages/InstrumentChart";
-import Instruments from "./pages/Instruments";
 import Login from "./pages/Login";
+import Watchlist from "./pages/Watchlist";
 import type { Instrument } from "./types";
 
 function Home({ session }: { session: Session }) {
   const me = useQuery({
     queryKey: ["me"],
-    queryFn: () => apiFetch<{ id: string; email: string | null }>("/me", session.access_token),
+    queryFn: () =>
+      apiFetch<{ id: string; email: string | null; is_admin: boolean }>("/me", session.access_token),
   });
   const [selected, setSelected] = useState<Instrument | null>(null);
 
@@ -28,10 +29,10 @@ function Home({ session }: { session: Session }) {
         </div>
       </div>
 
-      {selected ? (
+      {!me.data ? null : selected ? (
         <InstrumentChart session={session} instrument={selected} onBack={() => setSelected(null)} />
       ) : (
-        <Instruments session={session} onSelect={setSelected} />
+        <Watchlist session={session} isAdmin={me.data.is_admin} onSelect={setSelected} />
       )}
     </div>
   );

@@ -1,11 +1,38 @@
 import { API_URL } from "./supabase";
-import type { Bar, Instrument } from "../types";
+import type { Bar, ComplianceStatus, CsvImportResult, Instrument, WatchlistRow } from "../types";
+
+async function _errorFor(res: Response): Promise<Error> {
+  const detail = await res.json().catch(() => null);
+  return new Error(`API ${res.status}${detail?.detail ? `: ${detail.detail}` : ""}`);
+}
 
 export async function apiFetch<T>(path: string, token: string): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) throw new Error(`API ${res.status}`);
+  if (!res.ok) throw await _errorFor(res);
+  return (await res.json()) as T;
+}
+
+async function postJson<T>(path: string, body: unknown, token: string): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await _errorFor(res);
+  return (await res.json()) as T;
+}
+
+async function postFile<T>(path: string, file: File, token: string): Promise<T> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  if (!res.ok) throw await _errorFor(res);
   return (await res.json()) as T;
 }
 
@@ -63,4 +90,30 @@ export async function fetchAllBars(
   }
 
   return windows.reverse().flat();
+}
+
+export function fetchWatchlist(token: string): Promise<WatchlistRow[]> {
+  return apiFetch<WatchlistRow[]>("/watchlist", token);
+}
+
+export interface ComplianceInput {
+  instrument_id: number;
+  status: ComplianceStatus;
+  source: "manual" | "zoya" | "musaffa";
+  evidence_url?: string | null;
+  notes?: string | null;
+  checked_at: string; // ISO-8601 with an explicit offset
+  expires_at?: string | null;
+}
+
+export function postCompliance(input: ComplianceInput, token: string): Promise<unknown> {
+  return postJson("/compliance", input, token);
+}
+
+export function postCsvDryRun(file: File, token: string): Promise<CsvImportResult> {
+  return postFile<CsvImportResult>("/compliance/csv/dry-run", file, token);
+}
+
+export function postCsvConfirm(file: File, token: string): Promise<{ applied: number }> {
+  return postFile<{ applied: number }>("/compliance/csv/confirm", file, token);
 }

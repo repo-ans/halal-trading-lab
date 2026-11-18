@@ -22,3 +22,34 @@ export interface Bar {
   volume: number;
   source: string;
 }
+
+export type ComplianceStatus = "halal" | "not_halal" | "doubtful" | "not_covered";
+export type BlockingReason = ComplianceStatus | "no_record" | "expired";
+
+// Matches backend/app/routes/watchlist.py's WatchlistRow exactly. The app never
+// computes a halal status itself -- `status` is only ever what a human recorded.
+export interface WatchlistRow {
+  id: number;
+  symbol: string;
+  exchange: string;
+  status: ComplianceStatus | null;
+  blocking_reason: BlockingReason | null; // null means tradable
+  last_checked_at: string | null;
+  expires_at: string | null;
+  days_until_expiry: number | null;
+  latest_bar_ts: string | null;
+  evidence_url: string | null;
+}
+
+export interface CsvRowResult {
+  row_number: number;
+  accepted: boolean;
+  symbol: string | null;
+  exchange: string | null;
+  reason: string | null;
+}
+
+export interface CsvImportResult {
+  rows: CsvRowResult[];
+  all_accepted: boolean;
+}

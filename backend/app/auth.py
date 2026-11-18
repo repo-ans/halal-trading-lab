@@ -43,3 +43,16 @@ def current_user(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)) 
         return AuthUser(id=UUID(claims["sub"]), email=claims.get("email"))
     except (jwt.PyJWTError, KeyError, ValueError) as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token") from exc
+
+
+def is_admin(user: AuthUser) -> bool:
+    """ADMIN_USER_IDS unset or empty means NO ONE is admin -- fail closed, never
+    "everyone" or "no restriction" (admin_user_id_set is already empty in that case,
+    so a plain containment check is correct without a separate empty-check here)."""
+    return str(user.id).lower() in get_settings().admin_user_id_set
+
+
+def require_admin(user: AuthUser = Depends(current_user)) -> AuthUser:
+    if not is_admin(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "admin access required")
+    return user

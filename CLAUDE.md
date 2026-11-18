@@ -206,6 +206,28 @@ the paper engine must refuse the order.** This is a must-pass test, not a warnin
 
 The app never computes or infers a halal ruling itself. Ever.
 
+**UNCONFIRMED ASSUMPTIONS (Stage C, flagged, not yet confirmed by the owner):**
+- `doubtful` and `not_covered` block trading exactly like `not_halal`. Revisit if the
+  owner wants `doubtful` to warn-but-allow instead.
+- Default `expires_at` is `checked_at + 90 days`
+  (`COMPLIANCE_DEFAULT_VALIDITY_DAYS`, `backend/app/config.py`).
+
+**Gate implementation (Stage C):** `app/services/compliance.py`.
+`effective_status(check, now)` returns `"ok"` or one of the five reason codes
+(`no_record`, `not_halal`, `doubtful`, `not_covered`, `expired`); `assert_tradable
+(session, instrument_id, now)` raises `ComplianceBlocked(reason)` and, on success,
+returns the `compliance_checks.id` it used. `now` is always an explicit parameter,
+never read from the wall clock inside the gate — see §7's determinism note for why.
+
+`compliance_checks` is append-only, enforced by a DB trigger (migration 0003, on top
+of the `uq_compliance_one_current` partial unique index from migration 0001): DELETE
+always raises, and UPDATE raises unless `is_current` is the only column that changed
+— the one flip the service layer performs (old current row → `false`, same
+transaction as the new row's INSERT, in that order). Writes are admin-only
+(`ADMIN_USER_IDS`, a comma-separated list of Supabase user UUIDs — **unset or empty
+means NO ONE is admin**, fail closed, never "everyone"). Reads (`GET /watchlist`) are
+open to any authenticated user.
+
 ---
 
 ## 6. Database schema — 8 tables
@@ -219,9 +241,15 @@ money and price columns `NUMERIC(18,4)` — never `float`/`double`.
    close, volume, source. Unique on `(instrument_id, ts, interval)` so re-imports are
    idempotent.
 4. **`strategy_runs`** — the parameters of one backtest: instrument(s), date range,
-   fast/slow MA periods, cost assumptions, a seed/config hash, started_at, status
+   fast/slow MA periods, `reset_ma_each_session`, cost assumptions, `config_hash`,
+   `started_at`, `status`. Stage D (migration 0004) added two more JSONB columns,
+   both keyed by instrument_id: `blocked_instruments` (reason the gate rejected it)
+   and `compliance_check_ids` (the `compliance_checks.id` the gate used for each
+   compliant instrument — the snapshot the §7 determinism note depends on).
 5. **`signals`** — strategy_run_id, instrument_id, `signal_ts` (the bar that produced
-   it), side (`buy`/`sell`), reason (human-readable), and the MA values at that bar
+   it), side (`buy`/`sell`), reason (human-readable), the MA values at that bar, and
+   `execution_ts` (Stage D, migration 0004 — the next calendar-expected bar open,
+   same trading session, never the next bar found in the data)
 6. **`paper_orders`** — signal_id, instrument_id, side, qty, intended price,
    `execution_ts`, status, rejection reason
 7. **`paper_fills`** — order_id, fill price, qty, commission, spread cost, slippage
@@ -251,6 +279,62 @@ so filling at bar `T`'s price means trading on future information.
 This is a must-pass test (`no future bars`). Write it as a test before writing the
 engine.
 
+### Stage D: signal generation (`app/services/strategy.py`) — done 2026-11-18
+
+`generate_signals` is a pure function: Decimal only (explicit `localcontext`, never
+the ambient global context), no DB, no clock, no compliance gate, no bypass of any
+kind. State = `sign(ma_fast - ma_slow)` ∈ {+1, 0, -1}; crossing the state compares
+by **cross-multiplication** (`fast_sum*slow_period` vs `slow_sum*fast_period`), never
+by dividing, so a near-tie can never flip from rounding error. `STRATEGY_RULES_VERSION
+= "ma-cross-v1"` is one of the hashed config fields (below) — bump it whenever these
+rules change, so an old run's hash is never mistaken for being comparable to a new
+one.
+
+**UNCONFIRMED ASSUMPTIONS (owner has not confirmed; they change results):**
+1. MA continues across sessions by default. `reset_ma_each_session=True` instead
+   requires the whole slow-period window to lie within one session (no signals in
+   that session's first `slow_period` bars; the window never spans sessions).
+2. EOD exit is modelled as happening at the OPEN of the session's last bar: a BUY
+   signal whose execution bar would be that last bar is discarded outright (no time
+   to hold before the forced exit); a SELL signal there is kept.
+3. Gap-aware, and the tracked cross-state does **not** carry forward across a gap: a
+   bar is evaluable only if every bar its slow-period window needs is present in the
+   data. The first evaluable bar after any non-evaluable stretch only **sets** the
+   state — it never emits a signal, even if comparing it to the state from before
+   the gap would otherwise look like a cross. The pre-gap state is discarded, not
+   reused.
+4. Equal fast/slow MA is never a cross (state 0 satisfies neither side of a cross).
+
+**SESSION BOUNDARY (a correctness fix, not a configurable assumption):**
+`execution_ts` is always the next calendar-expected bar open in the **same trading
+session** as the signal bar — never the next session's open, however many calendar
+days away (a weekend or holiday included). A signal at a session's last bar is
+discarded (both sides) rather than let it execute as an overnight position, since
+this app is day-trading only. This is independent of `range_end`: a signal is never
+discarded just because its execution bar falls outside the requested range or has
+no data yet — that's Stage E's problem (refusing to fill), not this engine's, and
+discarding on `range_end` would break prefix-stability (the no-look-ahead must-pass
+test).
+
+**Warm-up / lookback:** the run service (`app/services/strategy_run.py`) loads
+`slow_period` calendar-expected bars *before* `range_start` so the first in-range
+bar can still get a signal if a real cross lands there — those lookback bars feed
+the state machine but can never themselves be emitted as a signal.
+
+**`config_hash`** is `sha256` of canonical JSON (sorted keys, Decimals as strings,
+instrument_ids sorted) over: `strategy_rules_version, instrument_ids, range_start,
+range_end, fast_period, slow_period, reset_ma_each_session, interval, currency,
+starting_cash, max_position_value, commission_per_order, spread_bps, slippage_bps`.
+Money fields are quantized to `NUMERIC(18,4)` before hashing — a freshly-built
+Decimal and the same value read back from the DB must hash identically, or a
+replay's hash would differ from the original's for no reason but string formatting
+(a real bug caught by the replay round-trip test; see `app/services/config_hash.py`).
+Never hashed: `started_at`/`finished_at`/run id — bookkeeping, not config.
+
+**Replay:** `POST /strategy-runs/{id}/replay` re-executes signal generation using
+the ORIGINAL run's stored `compliance_check_ids`/`blocked_instruments` — it never
+calls the gate again. See the Stage D/E design note below for why.
+
 ### Position and risk rules
 - Max position size: **CAD $200** per symbol
 - **Long-only** — no shorting, ever
@@ -265,6 +349,38 @@ engine.
 Re-running the same `strategy_run` config over the same bars must produce byte-identical
 signals, orders, and fills. No wall-clock reads, no unseeded randomness, no dict
 ordering dependence inside the engine. This is a must-pass test.
+
+### Stage D/E design note: when the compliance gate runs in a backtest
+The compliance gate (`app/services/compliance.py::assert_tradable`, built Stage C) is
+evaluated **once, at run start, using the real clock** — not re-evaluated
+point-in-time for every bar inside the historical simulation. The run then snapshots
+which `compliance_checks.id` it used (the id `assert_tradable` returns on success) on
+the `strategy_run`, so re-running an identical config stays byte-identical even if the
+real compliance record expires or changes between the two runs.
+
+**Why not point-in-time gating inside the simulation:** a historical backtest over,
+say, the last 60 days would need a compliance record that was already current on day
+1 of that window. In practice the first-ever compliance check for a symbol is
+recorded on the day an admin adds it — so point-in-time gating would block every
+trade before that day, for every backtest that includes it. That defeats backtesting
+entirely for any newly-added symbol. Evaluating once at run start (real clock) avoids
+this; the snapshot makes that one evaluation reproducible on rerun.
+
+`assert_tradable(session, instrument_id, now)` already supports this: `now` is always
+an explicit parameter (the real clock, passed in once by the Stage D/E run-setup
+code, never read internally), and it returns the `compliance_checks.id` it used on
+success specifically so the caller can record it.
+
+Stage D implements both sides of this: `run_strategy(..., now)` (`app/services/
+strategy_run.py`) is the one caller of `assert_tradable`, always with a `now` passed
+in by the route (`datetime.now(timezone.utc)`) — never read from the wall clock
+inside the service itself, so the service stays testable with a fixed clock.
+`replay_strategy_run(session, run_id, now)` is the other half: it copies the
+original run's `compliance_check_ids`/`blocked_instruments` straight across and
+**never calls `assert_tradable` again** — `now` there is bookkeeping only
+(`started_at`/`finished_at` on the new run row), not gating. A real compliance
+record expiring between the original run and a later replay cannot change the
+replay's outcome, by construction, not by coincidence.
 
 ---
 
@@ -300,13 +416,19 @@ Never hardcode market hours or holidays. Query the calendar.
 
 From the developer plan. Write these as real pytest tests, not manual checks.
 
-1. **Math and loss calculations are correct** — including losses, not just gains
-2. **Buys exceeding available cash are rejected**
-3. **Non-compliant or expired-compliance symbols are rejected**
-4. **No future bars are used** (next-bar execution enforced)
-5. **No fills when the market is closed or on a holiday**
-6. **API failure produces an error, never an invented or interpolated price**
-7. **Re-running an identical strategy run produces identical results**
+1. **Math and loss calculations are correct** — including losses, not just gains (Stage E)
+2. **Buys exceeding available cash are rejected** (Stage E)
+3. **Non-compliant or expired-compliance symbols are rejected** — done (Stage C gate)
+4. **No future bars are used** (next-bar execution enforced) — done (Stage D:
+   prefix-stability + perturbation tests, `tests/test_strategy_engine.py`)
+5. **No fills when the market is closed or on a holiday** (Stage E)
+6. **API failure produces an error, never an invented or interpolated price** — done (Stage B)
+7. **Re-running an identical strategy run produces identical results** — Stage D
+   proved this for signals (determinism + replay tests); stays open until Stage E
+   extends the same guarantee to orders and fills
+8. **Single-currency simulation: mixed-currency run is rejected** — done (Stage D;
+   not in the original developer plan's numbered list, added when it turned out to
+   be a one-line validation Stage D already needed to do)
 
 Test 6 deserves emphasis: on provider failure, fail loudly. Never forward-fill,
 interpolate, or fall back to the last known price to keep a run alive.
@@ -319,8 +441,8 @@ interpolate, or fall back to the last known price to keep a run alive.
 |---|---|---|
 | A | Repo, Docker Compose, migrations, login, README | Done (live-verified 2026-11-18) |
 | B | Provider adapter, backfill, data validation, charts | Done 2026-11-18 (B1 backend pipeline + B2 instruments/bars API and chart UI) |
-| C | Compliance form, evidence, expiry, order blocking | Not started |
-| D | 5/20 MA strategy, next-bar execution, deterministic | Not started |
+| C | Compliance form, evidence, expiry, order blocking | Done 2026-11-18 (gate + admin-only writes + CSV import + watchlist UI) |
+| D | 5/20 MA strategy, next-bar execution, deterministic | Done 2026-11-18 (signal generation only; no cash/sizing/fills/orders -- that's Stage E) |
 | E | Paper engine: cash ledger, positions, fills, EOD exit, costs | Not started |
 | F | Dashboard: watchlist, results, trade history, CSV export | Not started |
 | G | AI review — plain-language summaries from computed metrics only | Not started |
