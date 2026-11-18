@@ -1,0 +1,6 @@
+[
+  {"symbol": "AAPL", "exchange": "XNAS", "currency": "USD", "name": "Apple Inc."},
+  {"symbol": "MSFT", "exchange": "XNAS", "currency": "USD", "name": "Microsoft Corporation"},
+  {"symbol": "KO", "exchange": "XNYS", "currency": "USD", "name": "The Coca-Cola Company"},
+  {"symbol": "RY", "exchange": "XTSE", "currency": "CAD", "name": "Royal Bank of Canada"}
+]

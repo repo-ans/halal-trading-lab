@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -16,7 +17,14 @@ def _init() -> None:
         _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
 
 
-def get_session() -> Iterator[Session]:
+@contextmanager
+def session_scope() -> Iterator[Session]:
+    """For callers outside FastAPI's dependency injection -- the scheduler, scripts."""
     _init()
     with _SessionLocal() as session:
+        yield session
+
+
+def get_session() -> Iterator[Session]:
+    with session_scope() as session:
         yield session

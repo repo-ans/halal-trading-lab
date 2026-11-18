@@ -10,8 +10,12 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-# configparser treats % as interpolation; escape it.
-config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("%", "%%"))
+# Only default to DATABASE_URL if the caller hasn't already set sqlalchemy.url on
+# this Config (tests point this at the local test database instead -- see
+# tests/conftest.py's _migrated_test_db). configparser treats % as interpolation;
+# escape it.
+if not config.get_main_option("sqlalchemy.url"):
+    config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("%", "%%"))
 target_metadata = Base.metadata
 
 

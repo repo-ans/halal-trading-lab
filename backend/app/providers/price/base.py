@@ -24,6 +24,15 @@ class Bar:
 class PriceProvider(ABC):
     name: str
 
+    def symbol_for(self, symbol: str, exchange: str) -> str:
+        """Maps a canonical (Instrument.symbol, Instrument.exchange MIC code) pair to
+        whatever ticker string this provider's API expects. The provider-specific
+        result of this method must never be stored or passed around outside the
+        adapter that produced it -- callers pass it straight into get_bars() and
+        discard it. Default: identity (fine for providers with one global ticker
+        namespace, e.g. the mock and most US-only providers)."""
+        return symbol
+
     @abstractmethod
     def get_bars(self, symbol: str, interval: str, start: datetime, end: datetime) -> list[Bar]:
         """Bars with start <= ts < end, ascending by ts, tz-aware UTC.

@@ -47,12 +47,22 @@ def test_migration_sql():
     assert sql.count("CURRENCY ~ '^[A-Z]{3}$'") == 2
 
 
-@pytest.mark.skipif(os.environ.get("RUN_DB_TESTS") != "1",
-                    reason="live DB test: set RUN_DB_TESTS=1 with a real DATABASE_URL")
-def test_rls_enabled_on_all_tables_live():
+@pytest.mark.skipif(os.environ.get("RUN_LIVE_RLS_CHECK") != "1",
+                    reason="live, read-only check against the production Supabase "
+                           "project: set RUN_LIVE_RLS_CHECK=1")
+def test_rls_enabled_on_all_tables_live_readonly():
+    """Checks the REAL production database, not the local test database -- this is
+    the one test allowed to touch DATABASE_URL, and it must stay strictly read-only.
+    Gated behind its own marker (RUN_LIVE_RLS_CHECK), separate from RUN_DB_TESTS,
+    which governs the DB-WRITING tests against the local throwaway database (see
+    conftest.py). `SET TRANSACTION READ ONLY` makes Postgres itself reject any write
+    inside this transaction; the connection is never committed, only closed, so even a
+    read-only transaction's implicit state is discarded, not persisted."""
     from app.config import get_settings
+
     eng = sa.create_engine(get_settings().database_url)
     with eng.connect() as c:
+        c.execute(sa.text("SET TRANSACTION READ ONLY"))
         rows = c.execute(sa.text(
             "SELECT c.relname, c.relrowsecurity FROM pg_class c "
             "JOIN pg_namespace n ON n.oid = c.relnamespace "

@@ -46,6 +46,12 @@ prices, restricted to a human-approved **halal** watchlist.
 | CI + cron | GitHub Actions |
 | Tests | pytest + pytest-asyncio |
 
+**No Postgres service for the app database — one exception.** The app always talks to
+Supabase. The only local Postgres in this repo is `db_test` in `docker-compose.yml`,
+under `profiles: ["test"]` (so a plain `docker compose up` never starts it): a
+throwaway, tmpfs-backed database that DB-writing tests run against, so a test
+`TRUNCATE` can never land on production data. See §9 and `backend/tests/conftest.py`.
+
 ### Explicitly rejected — do not add these
 - **Celery + Redis** — the workload is one scheduled job per day, not a job queue.
   APScheduler covers it with zero extra infrastructure.
@@ -88,6 +94,11 @@ Consequences for this project:
 3. The owner pilot (virtual funds, single user, no clients) is a grey area. Whether
    the provider treats it as personal or commercial is an **open question to ask the
    provider in writing** — the answer is the difference between ~$30 and ~$399/month.
+4. **Stage H checklist item:** delete or replace every `price_bars` row with
+   `source='yfinance'` before any non-owner user can log in. `YFinanceProvider`
+   (`backend/app/providers/price/yfinance_provider.py`, Stage B1) tags every row it
+   writes this way specifically so this cleanup is a single `WHERE source='yfinance'`
+   away, not an audit.
 
 ---
 
@@ -95,6 +106,10 @@ Consequences for this project:
 
 The strategy needs **5-minute OHLCV bars**. That granularity, not the symbol list, is
 what makes this expensive.
+
+Yahoo returns RY.TO 5-minute bars (verified live 2026-11-18, 234 bars, aligned with
+AAPL), so TSX can be accumulated at $0 for development. Licensing is unchanged: the
+~$399/month question applies only before non-owner users see prices.
 
 ### Key finding: TSX intraday is the cost wall
 
@@ -302,8 +317,8 @@ interpolate, or fall back to the last known price to keep a run alive.
 
 | Stage | Scope | Status |
 |---|---|---|
-| A | Repo, Docker Compose, migrations, login, README | Built; live verification pending — see `docs/HANDOVER.md` |
-| B | Provider adapter, backfill, data validation, charts | Not started |
+| A | Repo, Docker Compose, migrations, login, README | Done (live-verified 2026-11-18) |
+| B | Provider adapter, backfill, data validation, charts | B1 (backend pipeline, no charts) done 2026-11-18; charts not started |
 | C | Compliance form, evidence, expiry, order blocking | Not started |
 | D | 5/20 MA strategy, next-bar execution, deterministic | Not started |
 | E | Paper engine: cash ledger, positions, fills, EOD exit, costs | Not started |
