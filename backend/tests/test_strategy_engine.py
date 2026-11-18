@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from app.market_calendar import session_bar_opens
-from app.services.strategy import STRATEGY_RULES_VERSION, Bar, generate_signals
+from app.services.strategy import STRATEGY_RULES_VERSION, Bar, compute_ma_series, generate_signals
 
 CAL = "NYSE"
 
@@ -323,6 +323,74 @@ def test_perturbation_deleting_future_bars_never_changes_past_signals():
 
     before = [s for s in baseline if s.signal_ts <= cutoff]
     assert truncated_signals == before
+
+
+@pytest.mark.parametrize("reset", [False, True])
+def test_compute_ma_series_matches_generate_signals_at_signal_bars(reset):
+    """scripts/preview_signals.py displays compute_ma_series' output -- it must be
+    IMPOSSIBLE for that to diverge from the values the engine actually used to
+    decide a cross, in either reset_ma_each_session mode. A separate, simplified
+    display computation (the previous implementation) could silently disagree;
+    sharing the same window-building code (_complete_window) cannot."""
+    day = date(2026, 12, 15)
+    bars = _synthetic_series(day, CAL, 60)
+    range_start, range_end = bars[0].ts, bars[-1].ts + timedelta(minutes=5)
+
+    signals = generate_signals(bars, fast_period=5, slow_period=20, calendar=CAL,
+                               range_start=range_start, range_end=range_end,
+                               reset_ma_each_session=reset)
+    series = compute_ma_series(bars, fast_period=5, slow_period=20, calendar=CAL,
+                               range_start=range_start, range_end=range_end,
+                               reset_ma_each_session=reset)
+
+    assert signals, "fixture should produce at least one signal to be a meaningful test"
+    for s in signals:
+        assert series[s.signal_ts] == (s.ma_fast, s.ma_slow)
+
+
+def test_compute_ma_series_reset_mode_warmup_is_independent_per_session():
+    """reset_ma_each_session=True: day2's first bar has neither a complete
+    fast(2) nor slow(3) window yet (0 same-session bars before it) -- both None.
+    Its second bar completes the fast window (2 bars) but not the slow one (needs
+    3) -- ma_fast appears, ma_slow stays None. Its third bar completes both. This
+    is the exact bug report: ma_fast must warm up on its OWN period, independent
+    of ma_slow, instead of both appearing or disappearing together."""
+    fast, slow = 2, 3
+    day1, day2 = date(2026, 12, 15), date(2026, 12, 16)
+    opens1, opens2 = session_bar_opens(day1, CAL), session_bar_opens(day2, CAL)
+    bars = _bars(opens1[-3:], [10, 10, 10]) + _bars(opens2[:3], [20, 20, 20])
+
+    series = compute_ma_series(
+        bars, fast_period=fast, slow_period=slow, calendar=CAL,
+        range_start=opens2[0], range_end=opens2[2] + timedelta(minutes=5),
+        reset_ma_each_session=True,
+    )
+
+    assert series[opens2[0]] == (None, None)
+    ma_fast_1, ma_slow_1 = series[opens2[1]]
+    assert ma_fast_1 is not None and ma_slow_1 is None
+    ma_fast_2, ma_slow_2 = series[opens2[2]]
+    assert ma_fast_2 is not None and ma_slow_2 is not None
+
+
+def test_compute_ma_series_default_mode_uses_cross_session_lookback():
+    """Contrast with the test above: reset_ma_each_session=False (the default)
+    lets day2's very first bar reach back into day1 for both windows, so neither
+    is None there -- the same cross-session-window behavior
+    test_default_mode_ma_window_spans_session_boundary proves for signals."""
+    fast, slow = 2, 3
+    day1, day2 = date(2026, 12, 15), date(2026, 12, 16)
+    opens1, opens2 = session_bar_opens(day1, CAL), session_bar_opens(day2, CAL)
+    bars = _bars(opens1[-3:], [10, 10, 10]) + _bars(opens2[:1], [20])
+
+    series = compute_ma_series(
+        bars, fast_period=fast, slow_period=slow, calendar=CAL,
+        range_start=opens2[0], range_end=opens2[0] + timedelta(minutes=5),
+        reset_ma_each_session=False,
+    )
+    ma_fast, ma_slow = series[opens2[0]]
+    assert ma_fast is not None
+    assert ma_slow is not None
 
 
 def test_determinism_same_inputs_twice():

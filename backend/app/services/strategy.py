@@ -75,17 +75,41 @@ def _session_schedule(calendar: str, start_day, end_day, interval_minutes: int) 
     return sessions
 
 
-def _window_start_index(i: int, pos: int, slow_period: int, reset_ma_each_session: bool) -> int | None:
-    """The index into the flat `expected` list where the slow_period-bar window
-    ending at index i begins, or None if there isn't enough history yet -- globally
-    (non-reset mode) or within the current session (reset mode)."""
+def _window_start_index(i: int, pos: int, period: int, reset_ma_each_session: bool) -> int | None:
+    """The index into the flat `expected` list where the period-bar window ending
+    at index i begins, or None if there isn't enough history yet -- globally
+    (non-reset mode) or within the current session (reset mode). Used with
+    period=slow_period by generate_signals (a bar can only ever cross once its
+    full slow window is available) and independently with either period by
+    compute_ma_series below, which has no such requirement -- it reports ma_fast
+    and ma_slow as soon as each one's own window is complete, which is earlier
+    than the slow window whenever fast_period < slow_period."""
     if reset_ma_each_session:
-        if pos < slow_period - 1:
+        if pos < period - 1:
             return None
-        return i - slow_period + 1
-    if i < slow_period - 1:
+        return i - period + 1
+    if i < period - 1:
         return None
-    return i - slow_period + 1
+    return i - period + 1
+
+
+def _complete_window(expected, bars_by_ts, i: int, pos: int, period: int,
+                     reset_ma_each_session: bool) -> list[datetime] | None:
+    """The period-bar window ending at expected[i], or None if any bar it needs is
+    missing from bars_by_ts (a data gap) or there isn't enough history (see
+    _window_start_index)."""
+    start = _window_start_index(i, pos, period, reset_ma_each_session)
+    if start is None:
+        return None
+    candidate = [expected[j][0] for j in range(start, i + 1)]
+    if not all(t in bars_by_ts for t in candidate):
+        return None
+    return candidate
+
+
+def _mean(bars_by_ts, window_ts: list[datetime], period: int) -> Decimal:
+    total = sum((bars_by_ts[t].close for t in window_ts), Decimal(0))
+    return (total / Decimal(period)).quantize(_QUANT, rounding=ROUND_HALF_UP)
 
 
 def _cross_sign(fast_sum: Decimal, slow_sum: Decimal, fast_period: int, slow_period: int) -> int:
@@ -135,12 +159,8 @@ def generate_signals(
         prev_state = 0
 
         for i, (ts, pos, session_len) in enumerate(expected):
-            start = _window_start_index(i, pos, slow_period, reset_ma_each_session)
-            window_ts = None
-            if start is not None:
-                candidate = [expected[j][0] for j in range(start, i + 1)]
-                if all(t in bars_by_ts for t in candidate):
-                    window_ts = candidate
+            window_ts = _complete_window(expected, bars_by_ts, i, pos, slow_period,
+                                         reset_ma_each_session)
 
             if window_ts is None:
                 have_prior_state = False
@@ -176,8 +196,8 @@ def generate_signals(
             if not (range_start <= ts < range_end):
                 continue  # lookback-only bar: state tracked, nothing emitted
 
-            ma_fast = (fast_sum / Decimal(fast_period)).quantize(_QUANT, rounding=ROUND_HALF_UP)
-            ma_slow = (slow_sum / Decimal(slow_period)).quantize(_QUANT, rounding=ROUND_HALF_UP)
+            ma_fast = _mean(bars_by_ts, window_ts[-fast_period:], fast_period)
+            ma_slow = _mean(bars_by_ts, window_ts, slow_period)
             reason = f"MA{fast_period} crossed {'above' if side == 'buy' else 'below'} MA{slow_period}"
             results.append(SignalResult(
                 signal_ts=ts, side=side, reason=reason,
@@ -185,3 +205,57 @@ def generate_signals(
             ))
 
         return results
+
+
+def compute_ma_series(
+    bars: list[Bar],
+    *,
+    fast_period: int,
+    slow_period: int,
+    calendar: str,
+    range_start: datetime,
+    range_end: datetime,
+    interval_minutes: int = 5,
+    reset_ma_each_session: bool = False,
+) -> dict[datetime, tuple[Decimal | None, Decimal | None]]:
+    """ts -> (ma_fast, ma_slow), either None if that bar's own window isn't
+    complete yet. Uses the EXACT same calendar schedule, gap-awareness, and
+    reset_ma_each_session rule as generate_signals -- same `_complete_window` call,
+    same arguments -- so a tool that displays these values (scripts/
+    preview_signals.py) can never silently diverge from what the engine actually
+    used to decide a cross. Unlike generate_signals, fast and slow are each
+    evaluated independently (no state machine, no gap-aware "first bar after a gap
+    only sets state" rule -- that rule is about SIGNAL emission, not about whether
+    an MA value itself is computable), so ma_fast can be available before ma_slow
+    whenever fast_period < slow_period, exactly as a plain warm-up would look.
+    Only reports bars that are both in `bars` and inside [range_start, range_end) --
+    this is a display aid, not something Stage E reads."""
+    if not bars:
+        return {}
+
+    with localcontext() as ctx:
+        ctx.prec = 40
+
+        schedule_start = bars[0].ts.date()
+        sessions = _session_schedule(calendar, schedule_start, range_end.date(), interval_minutes)
+        expected: list[tuple[datetime, int, int]] = []
+        for session in sessions:
+            session_len = len(session)
+            for pos, ts in enumerate(session):
+                expected.append((ts, pos, session_len))
+
+        bars_by_ts = {b.ts: b for b in bars}
+
+        out: dict[datetime, tuple[Decimal | None, Decimal | None]] = {}
+        for i, (ts, pos, _session_len) in enumerate(expected):
+            if ts not in bars_by_ts or not (range_start <= ts < range_end):
+                continue
+            fast_window = _complete_window(expected, bars_by_ts, i, pos, fast_period,
+                                           reset_ma_each_session)
+            slow_window = _complete_window(expected, bars_by_ts, i, pos, slow_period,
+                                           reset_ma_each_session)
+            ma_fast = _mean(bars_by_ts, fast_window, fast_period) if fast_window is not None else None
+            ma_slow = _mean(bars_by_ts, slow_window, slow_period) if slow_window is not None else None
+            out[ts] = (ma_fast, ma_slow)
+
+        return out

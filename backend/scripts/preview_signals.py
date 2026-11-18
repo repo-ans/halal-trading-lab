@@ -1,16 +1,20 @@
-"""Read-only preview of what the signal engine would compute for one symbol and
-one trading session. Development/debugging only -- never writes anything, never
-creates a strategy_runs or signals row, never calls the compliance gate.
+"""Read-only preview of what the signal engine would compute for one symbol over
+one or more consecutive trading sessions. Development/debugging only -- never
+writes anything, never creates a strategy_runs or signals row, never calls the
+compliance gate.
 
-The ma_fast/ma_slow columns printed here are a simple, non-gap-aware rolling mean
-over whatever bars happen to be loaded, for eyeballing only -- they are NOT the
-authoritative engine's windows (app/services/strategy.py), which are calendar-gap-
-aware and compared by cross-multiplication, never by dividing. Only the "signal"
-column reflects the real engine's output.
+The ma_fast/ma_slow columns come straight from the engine's own
+compute_ma_series (app/services/strategy.py) -- the exact same calendar schedule,
+gap-awareness, and reset_ma_each_session rule generate_signals uses to decide a
+cross, just reported per-bar instead of gated into a state machine. An earlier
+version of this script computed its own simplified rolling mean instead, which
+silently ignored reset_ma_each_session (both modes rendered identically) -- never
+duplicate the engine's windowing here again.
 
 Usage:
     python scripts/preview_signals.py --symbol AAPL --exchange XNAS --date 2026-11-17
-    python scripts/preview_signals.py --symbol AAPL --exchange XNAS --date 2026-11-17 \\
+    python scripts/preview_signals.py --symbol AAPL --exchange XNAS \\
+        --date 2026-11-16 --end-date 2026-11-17 \\
         --fast 5 --slow 20 --csv out.csv
 """
 import argparse
@@ -18,7 +22,6 @@ import csv as csv_module
 import sys
 from datetime import date as date_cls
 from pathlib import Path
-from decimal import Decimal, ROUND_HALF_UP
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # backend/ on sys.path
 
@@ -28,29 +31,10 @@ from app.db import session_scope  # noqa: E402
 from app.market_calendar import EXCHANGE_CALENDARS, session_bounds  # noqa: E402
 from app.models.instrument import Instrument  # noqa: E402
 from app.models.price_bar import SUPPORTED_INTERVAL, PriceBar  # noqa: E402
-from app.services.strategy import Bar, generate_signals  # noqa: E402
-from app.services.strategy_run import _load_bars  # noqa: E402  -- read-only, reused as-is
+from app.services.strategy import compute_ma_series, generate_signals  # noqa: E402
+from app.services.strategy_run import _load_bars  # noqa: E402 -- read-only, reused as-is
 
 BANNER = "DEV PREVIEW, NOT A TRADING SIGNAL, writes nothing, not gated"
-_QUANT = Decimal("0.0001")
-
-
-def _display_mas(rows: list[PriceBar], fast_period: int, slow_period: int) -> dict:
-    """ts -> (ma_fast|None, ma_slow|None). Plain trailing rolling mean over `rows`
-    in the order given -- display only, see module docstring."""
-    closes = [r.close for r in rows]
-    out = {}
-    for i, r in enumerate(rows):
-        ma_fast = None
-        ma_slow = None
-        if i + 1 >= fast_period:
-            window = closes[i + 1 - fast_period:i + 1]
-            ma_fast = (sum(window) / Decimal(fast_period)).quantize(_QUANT, rounding=ROUND_HALF_UP)
-        if i + 1 >= slow_period:
-            window = closes[i + 1 - slow_period:i + 1]
-            ma_slow = (sum(window) / Decimal(slow_period)).quantize(_QUANT, rounding=ROUND_HALF_UP)
-        out[r.ts] = (ma_fast, ma_slow)
-    return out
 
 
 def main() -> None:
@@ -58,7 +42,10 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--symbol", required=True)
     parser.add_argument("--exchange", required=True, help="MIC code, e.g. XNAS")
-    parser.add_argument("--date", required=True, help="YYYY-MM-DD, the session to preview")
+    parser.add_argument("--date", required=True, help="YYYY-MM-DD, the first session to preview")
+    parser.add_argument("--end-date", default=None,
+                        help="YYYY-MM-DD, the last session to preview (inclusive). "
+                             "Defaults to --date (a single session).")
     parser.add_argument("--fast", type=int, default=5)
     parser.add_argument("--slow", type=int, default=20)
     parser.add_argument("--reset-ma-each-session", action="store_true")
@@ -71,11 +58,18 @@ def main() -> None:
     if calendar is None:
         sys.exit(f"no market calendar configured for exchange {args.exchange!r}")
 
-    day = date_cls.fromisoformat(args.date)
-    bounds = session_bounds(day, calendar)
-    if bounds is None:
+    start_day = date_cls.fromisoformat(args.date)
+    end_day = date_cls.fromisoformat(args.end_date) if args.end_date else start_day
+    if end_day < start_day:
+        sys.exit("--end-date must not be before --date")
+
+    start_bounds = session_bounds(start_day, calendar)
+    if start_bounds is None:
         sys.exit(f"{args.date} is not a trading session on {calendar}")
-    range_start, range_end = bounds
+    end_bounds = session_bounds(end_day, calendar)
+    if end_bounds is None:
+        sys.exit(f"{args.end_date} is not a trading session on {calendar}")
+    range_start, range_end = start_bounds[0], end_bounds[1]
 
     with session_scope() as session:
         # Read-only at the database level, not just by convention -- this
@@ -90,6 +84,9 @@ def main() -> None:
         if instrument is None:
             sys.exit(f"no instrument {args.symbol}/{args.exchange} found")
 
+        # _load_bars already includes slow_period's worth of lookback before
+        # range_start -- the same bars generate_signals and compute_ma_series both
+        # need, fetched once and shared between the two calls below.
         engine_bars = _load_bars(session, instrument.id, calendar, range_start, range_end, args.slow)
         signals = generate_signals(
             engine_bars, fast_period=args.fast, slow_period=args.slow, calendar=calendar,
@@ -97,21 +94,24 @@ def main() -> None:
             reset_ma_each_session=args.reset_ma_each_session,
         )
         signal_by_ts = {s.signal_ts: s for s in signals}
-        execution_by_ts = {s.signal_ts: s.execution_ts for s in signals}
+        mas = compute_ma_series(
+            engine_bars, fast_period=args.fast, slow_period=args.slow, calendar=calendar,
+            range_start=range_start, range_end=range_end,
+            reset_ma_each_session=args.reset_ma_each_session,
+        )
 
-        all_rows = session.scalars(
+        rows = session.scalars(
             select(PriceBar).where(
                 PriceBar.instrument_id == instrument.id,
                 PriceBar.interval == SUPPORTED_INTERVAL,
+                PriceBar.ts >= range_start,
                 PriceBar.ts < range_end,
             ).order_by(PriceBar.ts)
         ).all()
-        mas = _display_mas(all_rows, args.fast, args.slow)
-        rows = [r for r in all_rows if range_start <= r.ts < range_end]
 
     table_rows = []
     for r in rows:
-        ma_fast, ma_slow = mas[r.ts]
+        ma_fast, ma_slow = mas.get(r.ts, (None, None))
         sig = signal_by_ts.get(r.ts)
         table_rows.append({
             "ts": r.ts.isoformat(), "open": str(r.open), "high": str(r.high),
