@@ -17,7 +17,12 @@ class Settings(BaseSettings):
     # The throwaway local Postgres (docker-compose service db_test, profile "test")
     # that DB-writing tests run against. Never the production project -- conftest.py
     # refuses to run DB tests if this equals database_url or is not on localhost.
-    test_database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5433/halal_test"
+    # 127.0.0.1, not "localhost": Docker publishes this port on IPv4 only (see
+    # docker-compose.yml), and on this stack "localhost" resolves to the IPv6
+    # loopback first -- nothing is listening there, so every connection stalls on
+    # that attempt before falling back to IPv4 (discovered 2026-11-19: a single
+    # migration command took over two minutes instead of instant).
+    test_database_url: str = "postgresql+psycopg://postgres:postgres@127.0.0.1:5433/halal_test"
     supabase_url: str = ""
     supabase_jwt_secret: str = ""
     cors_origins: str = "http://localhost:5173"

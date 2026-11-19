@@ -15,8 +15,14 @@ from app.models.instrument import Instrument
 from app.providers.price.base import PriceProvider, ProviderError
 from app.services.backfill import run_backfill
 from app.services.compliance import ComplianceBlocked, assert_tradable
+from app.services.paper_engine import SignalIn, simulate_fills
 from app.services.strategy import Bar, generate_signals
 from app.services.strategy_run import CurrencyMismatch, run_strategy
+
+_PAPER_KWARGS = dict(
+    commission_per_order=Decimal("1.00"), spread_bps=Decimal("2"), slippage_bps=Decimal("1"),
+    max_position_value=Decimal("200"), starting_cash=Decimal("1000"),
+)
 
 
 def placeholder(stage: str):
@@ -24,15 +30,44 @@ def placeholder(stage: str):
                              raises=NotImplementedError)
 
 
-@placeholder("E")
 def test_1_math_and_loss_calculations_are_correct():
-    """P/L maths incl. losses (not just gains), Decimal throughout."""
-    raise NotImplementedError
+    """P/L maths incl. a LOSS, not just a gain, Decimal throughout
+    (app/services/paper_engine.py::simulate_fills). Buy at 100, sell at 90 --
+    a realized loss, computed exactly, not approximated."""
+    day = date(2026, 12, 15)
+    opens = session_bar_opens(day, "NYSE")
+    bars = {opens[0]: Decimal("100"), opens[1]: Decimal("90")}
+    signals = [
+        SignalIn(signal_id=1, instrument_id=1, side="buy", execution_ts=opens[0]),
+        SignalIn(signal_id=2, instrument_id=1, side="sell", execution_ts=opens[1]),
+    ]
+
+    results = simulate_fills(
+        signals, {1: bars}, calendars_by_instrument={1: "NYSE"},
+        range_start=opens[0], range_end=opens[1] + timedelta(minutes=5), **_PAPER_KWARGS,
+    )
+
+    buy, sell = results
+    assert buy.fill.cash_balance_after == Decimal("898.9800")  # 1000 - (100.02 + 1.00)
+    assert sell.fill.cash_balance_after == Decimal("987.9620")  # + (89.982 - 1.00)
+    realized_pnl = sell.fill.cash_balance_after - Decimal("1000")
+    assert realized_pnl == Decimal("-12.0380")  # a real, exact LOSS
 
 
-@placeholder("E")
 def test_2_buys_exceeding_available_cash_are_rejected():
-    raise NotImplementedError
+    day = date(2026, 12, 15)
+    opens = session_bar_opens(day, "NYSE")
+    bars = {opens[0]: Decimal("100")}
+    signals = [SignalIn(signal_id=1, instrument_id=1, side="buy", execution_ts=opens[0])]
+
+    results = simulate_fills(
+        signals, {1: bars}, calendars_by_instrument={1: "NYSE"},
+        range_start=opens[0], range_end=opens[0] + timedelta(minutes=5),
+        **{**_PAPER_KWARGS, "starting_cash": Decimal("101.01")},  # one cent short of 101.02
+    )
+
+    assert results[0].status == "rejected"
+    assert results[0].rejection_reason == "insufficient_cash"
 
 
 def _mock_session_returning(check: ComplianceCheck | None) -> MagicMock:
@@ -96,9 +131,21 @@ def test_4_no_future_bars_used_next_bar_execution():
     assert truncated_signals == baseline, "deleting the bar AFTER the signal changed it"
 
 
-@placeholder("E")
 def test_5_no_fills_when_market_closed_or_holiday():
-    raise NotImplementedError
+    """No price_bars row at the execution bar (market closed, holiday, or any
+    other gap) -> rejected, never an invented or interpolated fill."""
+    day = date(2026, 12, 15)
+    opens = session_bar_opens(day, "NYSE")
+    signals = [SignalIn(signal_id=1, instrument_id=1, side="buy", execution_ts=opens[0])]
+
+    results = simulate_fills(
+        signals, {1: {}}, calendars_by_instrument={1: "NYSE"},
+        range_start=opens[0], range_end=opens[0] + timedelta(minutes=5), **_PAPER_KWARGS,
+    )
+
+    assert results[0].status == "rejected"
+    assert results[0].rejection_reason == "execution_bar_missing"
+    assert results[0].fill is None
 
 
 class _FailingProvider(PriceProvider):
@@ -129,13 +176,26 @@ def test_6_api_failure_raises_never_invents_a_price():
     session.scalars.assert_not_called()
 
 
-@placeholder("E")
 def test_7_identical_strategy_run_gives_identical_results():
-    """Same config + same bars -> byte-identical signals, orders AND FILLS. Stage D
-    proved this for signals alone (determinism + replay tests in
-    test_strategy_engine.py / test_strategy_run_service.py) -- stays xfail until
-    Stage E adds fills to the same guarantee."""
-    raise NotImplementedError
+    """Same config + same bars -> byte-identical signals, orders AND fills. Stage D
+    proved this for signals (determinism + replay tests in test_strategy_engine.py
+    / test_strategy_run_service.py); this is the fills half, via the same pure,
+    no-DB-no-clock simulate_fills Stage E's orchestration layer calls."""
+    day = date(2026, 12, 15)
+    opens = session_bar_opens(day, "NYSE")
+    bars = {opens[0]: Decimal("100"), opens[1]: Decimal("110")}
+    signals = [
+        SignalIn(signal_id=1, instrument_id=1, side="buy", execution_ts=opens[0]),
+        SignalIn(signal_id=2, instrument_id=1, side="sell", execution_ts=opens[1]),
+    ]
+    kwargs = dict(
+        calendars_by_instrument={1: "NYSE"}, range_start=opens[0],
+        range_end=opens[1] + timedelta(minutes=5), **_PAPER_KWARGS,
+    )
+
+    first = simulate_fills(signals, {1: bars}, **kwargs)
+    second = simulate_fills(signals, {1: bars}, **kwargs)
+    assert first == second
 
 
 def test_8_run_rejected_if_instruments_not_all_in_run_currency():

@@ -275,13 +275,28 @@ money and price columns `NUMERIC(18,4)` — never `float`/`double`.
    `started_at`, `status`. Stage D (migration 0004) added two more JSONB columns,
    both keyed by instrument_id: `blocked_instruments` (reason the gate rejected it)
    and `compliance_check_ids` (the `compliance_checks.id` the gate used for each
-   compliant instrument — the snapshot the §7 determinism note depends on).
+   compliant instrument — the snapshot the §7 determinism note depends on). Stage E
+   (migration 0005) added `paper_status` (`'not_run'`/`'completed'`, default
+   `'not_run'`) and `paper_completed_at` — the paper engine locks this row
+   (`SELECT ... FOR UPDATE`), writes every order/fill, and flips the status in one
+   transaction, so a second call (even on a run with zero orders) always sees
+   `'completed'` and refuses rather than ever duplicating. `commission_per_order`,
+   `spread_bps`, `slippage_bps` gained defaults (`1.00`, `2`, `1`) in the same
+   migration — assumptions, not researched figures; §11 lists them as open.
 5. **`signals`** — strategy_run_id, instrument_id, `signal_ts` (the bar that produced
    it), side (`buy`/`sell`), reason (human-readable), the MA values at that bar, and
    `execution_ts` (Stage D, migration 0004 — the next calendar-expected bar open,
    same trading session, never the next bar found in the data)
 6. **`paper_orders`** — signal_id, instrument_id, side, qty, intended price,
-   `execution_ts`, status, rejection reason
+   `execution_ts`, status, rejection reason. Migration 0005 replaced the old
+   `qty > 0` CHECK with a status-conditional one (`filled` implies `qty > 0`;
+   anything else allows `qty >= 0`, needed so a real zero-share rejection like
+   `price_exceeds_max_position` can be recorded at all), and added a CHECK
+   enumerating every `rejection_reason` value (kept in sync with
+   `app/models/paper.py::REJECTION_REASONS`): `price_exceeds_max_position`,
+   `insufficient_cash`, `position_already_open`, `no_open_position_to_sell`,
+   `execution_bar_missing`, `execution_bar_missing_eod`,
+   `instrument_frozen_unresolved_eod`.
 7. **`paper_fills`** — order_id, fill price, qty, commission, spread cost, slippage
    cost, cash balance after. This table is the cash ledger's audit trail.
 8. **`ai_reports`** — strategy_run_id, generated text, and the exact computed metrics
@@ -380,6 +395,67 @@ Re-running the same `strategy_run` config over the same bars must produce byte-i
 signals, orders, and fills. No wall-clock reads, no unseeded randomness, no dict
 ordering dependence inside the engine. This is a must-pass test.
 
+### Stage E: paper engine (`app/services/paper_engine.py`) — done 2026-11-19
+
+`simulate_fills` is pure, exactly like `generate_signals`: no DB, no clock, no
+compliance gate (signals only ever exist for instruments already compliant when
+the run started — Stage E never re-checks, and never imports the gate module at
+all, a static-source-scan test proves it).
+
+**Affordability** (a real bug caught before shipping): `qty*fill_price +
+commission <= cash`. `spread_cost`/`slippage_cost` are reporting-only breakdowns
+already folded into `fill_price` — an earlier draft added them to the cash check
+a second time, which would have rejected affordable trades. Never add them to
+the cash check or the cash movement.
+
+**Sizing.** BUY: compute the adverse `fill_price` FIRST, then
+`qty = floor(max_position_value / fill_price)` — the $200 cap can never be
+exceeded by the bps adjustment, and `price_exceeds_max_position` is decided on
+`fill_price`, not the raw open. SELL: always closes the ENTIRE open position,
+never re-sized.
+
+**Fills.** Adverse price adjustment: `adjustment_bps = spread_bps/2 +
+slippage_bps`; BUY pays `raw_open*(1+adjustment_bps/10000)`, SELL receives
+`raw_open*(1-adjustment_bps/10000)` — slippage always adverse, spread the usual
+half-each-side convention. `fill_price` is rounded to 4dp FIRST
+(`app/services/money.py::quantize_money`, the one named rounding rule); the cash
+movement (`fill_price*qty +/- commission`) gets NO further rounding — exact,
+since `qty` is a whole number and `commission` is already clean. A reconciliation
+test recomputes every `cash_balance_after` from `paper_fills` rows alone
+(`starting_cash` + movements) and requires byte-exact equality.
+
+**EOD exit.** At every session's end, any instrument still holding a position
+gets a synthetic sell at that session's last bar's open (reusing the calendar
+logic Stage D already uses for the same bar). If that bar is missing, the order
+is rejected (`execution_bar_missing_eod`) and the instrument is **frozen for the
+rest of the run** — no further orders processed for it
+(`instrument_frozen_unresolved_eod`) — rather than ever carrying an unresolved
+position into a later session and selling it there. A regular (non-EOD)
+signal-driven sell failing on a missing bar does NOT freeze the instrument; only
+an EOD-exit failure does.
+
+**Ordering — an ENGINEERING CONVENTION, not a business rule.** The global event
+queue (every signal across every instrument, plus one EOD checkpoint per
+instrument per session) is sorted by `(execution_ts, sells-and-EOD-checkpoints
+before buys, instrument_id)`. A same-bar sell can free cash for a same-bar buy;
+which instrument's buy "wins" when two buys compete for scarce cash is just
+whichever has the lower `instrument_id` — no trading-priority meaning.
+
+**Run state.** `strategy_runs.paper_status`/`paper_completed_at` (migration
+0005). `run_paper_engine` locks the run row (`SELECT ... FOR UPDATE`), checks
+`paper_status`, writes every order/fill, and sets the status in ONE transaction.
+A second call — even against a run that produced zero orders — raises
+`PaperEngineAlreadyRun` (409 at the route layer) rather than ever duplicating. A
+real two-connection test (not a mock) proves the row lock actually serializes two
+concurrent callers into exactly one set of rows.
+
+**Ownership.** `GET /strategy-runs/{id}`, `/signals`, `/replay`,
+`POST /strategy-runs/{id}/paper-run`, `GET .../orders`, `GET .../fills` all check
+that `strategy_runs.user_id` equals the caller — not found and not-yours both
+return 404, never a 403 that would leak existence. (The first three of these
+were Stage D routes missing this check entirely until Stage E added it
+everywhere at once — a real gap, not a hypothetical one.)
+
 ### Stage D/E design note: when the compliance gate runs in a backtest
 The compliance gate (`app/services/compliance.py::assert_tradable`, built Stage C) is
 evaluated **once, at run start, using the real clock** — not re-evaluated
@@ -446,16 +522,18 @@ Never hardcode market hours or holidays. Query the calendar.
 
 From the developer plan. Write these as real pytest tests, not manual checks.
 
-1. **Math and loss calculations are correct** — including losses, not just gains (Stage E)
-2. **Buys exceeding available cash are rejected** (Stage E)
+1. **Math and loss calculations are correct** — including losses, not just gains —
+   done (Stage E: a hand-computed realized LOSS, not just a gain)
+2. **Buys exceeding available cash are rejected** — done (Stage E: `insufficient_cash`)
 3. **Non-compliant or expired-compliance symbols are rejected** — done (Stage C gate)
 4. **No future bars are used** (next-bar execution enforced) — done (Stage D:
    prefix-stability + perturbation tests, `tests/test_strategy_engine.py`)
-5. **No fills when the market is closed or on a holiday** (Stage E)
+5. **No fills when the market is closed or on a holiday** — done (Stage E:
+   `execution_bar_missing`/`execution_bar_missing_eod`, never an invented price)
 6. **API failure produces an error, never an invented or interpolated price** — done (Stage B)
-7. **Re-running an identical strategy run produces identical results** — Stage D
-   proved this for signals (determinism + replay tests); stays open until Stage E
-   extends the same guarantee to orders and fills
+7. **Re-running an identical strategy run produces identical results** — done
+   (Stage D proved it for signals; Stage E's `simulate_fills` is pure and proves
+   the same for orders and fills)
 8. **Single-currency simulation: mixed-currency run is rejected** — done (Stage D;
    not in the original developer plan's numbered list, added when it turned out to
    be a one-line validation Stage D already needed to do)
@@ -473,7 +551,7 @@ interpolate, or fall back to the last known price to keep a run alive.
 | B | Provider adapter, backfill, data validation, charts | Done 2026-11-18 (B1 backend pipeline + B2 instruments/bars API and chart UI) |
 | C | Compliance form, evidence, expiry, order blocking | Done 2026-11-18 (gate + admin-only writes + CSV import + watchlist UI) |
 | D | 5/20 MA strategy, next-bar execution, deterministic | Done 2026-11-18 (signal generation only; no cash/sizing/fills/orders -- that's Stage E) |
-| E | Paper engine: cash ledger, positions, fills, EOD exit, costs | Not started |
+| E | Paper engine: cash ledger, positions, fills, EOD exit, costs | Done 2026-11-19 (sizing, fills, EOD exit + freeze, cash ledger, ownership checks retrofitted onto Stage D too) |
 | F | Dashboard: watchlist, results, trade history, CSV export | Not started |
 | G | AI review — plain-language summaries from computed metrics only | Not started |
 | H | Automated tests, security checks, demo data, licence check | Demo data done 2026-11-18 (ahead of schedule, built between D and E so E-G can be demoed in isolation — see §5's "Demo environment fixtures" and the README); tests/security/licence check not started |
@@ -504,6 +582,10 @@ summaries · wk 6 owner pilot (virtual funds only).
    **Recommended approach:** build the engine so one code path runs over both
    historical bars (backtest) and live bars (suggestions), satisfying both without a
    rewrite.
+4. **Stage E's default cost assumptions.** `commission_per_order=1.00`,
+   `spread_bps=2`, `slippage_bps=1` (migration 0005) are placeholders, not
+   researched figures for the actual US/TSX symbols in play. Stage E does not
+   block on these being confirmed, but real backtest results depend on them.
 
 ---
 
@@ -522,3 +604,24 @@ summaries · wk 6 owner pilot (virtual funds only).
   ruling. Pass it numbers the code already calculated — never raw bars to "analyse".
 - Every screen needs the disclaimer: *paper trading only, not financial advice,
   halal status from a third party and not our own ruling.*
+- **Never run a command that expands environment variables or `.env` contents into
+  its output** — `docker compose config`, `env`, `printenv`, `cat .env` (or any
+  editor/pager on it), `set` with no args, and the like. `docker compose config`
+  specifically re-renders the WHOLE compose file, including services you didn't
+  ask about, interpolating `.env` as it goes — asking it about `db_test`/`db_demo`
+  still prints the `backend` service's real `DATABASE_URL` password, `JOB_SECRET`,
+  and Supabase keys in plaintext (this happened once, 2026-11-19: the output was
+  caught and the temp file it was written to was deleted immediately, but it had
+  already landed in the tool-output transcript — the DB password and `JOB_SECRET`
+  were rotated afterward). For container/port checks, use `docker inspect` or
+  `docker port`, which report the running container's actual state and never touch
+  `.env`.
+- **Always connect to `db_test`/`db_demo` with the literal `127.0.0.1`, never the
+  hostname `"localhost"`.** Docker Desktop on this stack only publishes those
+  ports on IPv4 — a `"[::1]:PORT:PORT"` binding in `docker-compose.yml` is
+  silently ignored (confirmed via `docker inspect`, 2026-11-19), and this
+  machine resolves `"localhost"` to the IPv6 loopback first, so every connection
+  stalls on that failed attempt before falling back to IPv4 (one migration
+  command took over two minutes instead of being instant). `app/config.py`'s
+  `test_database_url` default and every doc/script example already use
+  `127.0.0.1` for this reason.

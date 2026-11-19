@@ -148,7 +148,7 @@ docker compose --profile demo up -d db_demo
 #    to be prompted (hidden input, never a CLI argument / shell history).
 cd backend
 $env:APP_MODE = "demo"
-$env:DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5434/halal_demo"
+$env:DATABASE_URL = "postgresql+psycopg://postgres:postgres@127.0.0.1:5434/halal_demo"  # not "localhost" -- it resolves to the IPv6 loopback first here, which stalls every connection for a while before falling back
 $env:SOURCE_DATABASE_URL = "<production DATABASE_URL>"   # optional; omit to be prompted
 python scripts/seed_demo.py
 

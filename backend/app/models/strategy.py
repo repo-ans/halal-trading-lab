@@ -17,6 +17,7 @@ class StrategyRun(Base):
         CheckConstraint("fast_period < slow_period", name="ck_ma_periods"),
         CheckConstraint("range_end > range_start", name="ck_run_range"),
         CheckConstraint("status IN ('pending','running','completed','failed')", name="ck_run_status"),
+        CheckConstraint("paper_status IN ('not_run','completed')", name="ck_paper_status"),
         Index("ix_strategy_runs_user", "user_id", "started_at"),
         Index("ix_strategy_runs_hash", "config_hash"),
     )
@@ -34,9 +35,11 @@ class StrategyRun(Base):
     reset_ma_each_session: Mapped[bool] = mapped_column(Boolean, server_default="false")
     starting_cash: Mapped[Decimal] = mapped_column(Money, server_default="1000")
     max_position_value: Mapped[Decimal] = mapped_column(Money, server_default="200")
-    commission_per_order: Mapped[Decimal] = mapped_column(Money)
-    spread_bps: Mapped[Decimal] = mapped_column(Money)
-    slippage_bps: Mapped[Decimal] = mapped_column(Money)
+    # Defaults are ASSUMPTIONS, not researched figures -- CLAUDE.md section 11 lists
+    # them as open CEO decisions. Stage E does not block on confirming them.
+    commission_per_order: Mapped[Decimal] = mapped_column(Money, server_default="1.00")
+    spread_bps: Mapped[Decimal] = mapped_column(Money, server_default="2")
+    slippage_bps: Mapped[Decimal] = mapped_column(Money, server_default="1")
     config_hash: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(Text, server_default="pending")
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
@@ -51,6 +54,13 @@ class StrategyRun(Base):
     # clock, so it stays reproducible even if the real record expires in between).
     blocked_instruments: Mapped[dict] = mapped_column(JSONB, server_default="{}")
     compliance_check_ids: Mapped[dict] = mapped_column(JSONB, server_default="{}")
+    # Stage E (migration 0005). The paper engine (app/services/paper_engine.py)
+    # locks this row (SELECT ... FOR UPDATE), checks paper_status=='not_run', writes
+    # every paper_orders/paper_fills row, and flips this to 'completed' in ONE
+    # transaction -- a second call, even for a run that produced zero orders, sees
+    # 'completed' and refuses (PaperEngineAlreadyRun) rather than ever duplicating.
+    paper_status: Mapped[str] = mapped_column(Text, server_default="not_run")
+    paper_completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class Signal(Base):

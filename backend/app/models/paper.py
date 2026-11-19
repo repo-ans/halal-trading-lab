@@ -6,6 +6,19 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, Money, UTCDateTime, pk_column
 
+# Kept in sync with app/services/paper_engine.py::REJECTION_REASONS and migration
+# 0005's ck_order_rejection_reason_enum -- the DB CHECK is the authoritative source,
+# this tuple exists so Python code can validate/test against the same set.
+REJECTION_REASONS = (
+    "price_exceeds_max_position",
+    "insufficient_cash",
+    "position_already_open",
+    "no_open_position_to_sell",
+    "execution_bar_missing",
+    "execution_bar_missing_eod",
+    "instrument_frozen_unresolved_eod",
+)
+
 
 class PaperOrder(Base):
     """signal_id is NULL for end-of-day forced exits (origin = 'eod_exit')."""
@@ -15,10 +28,21 @@ class PaperOrder(Base):
         CheckConstraint("origin IN ('signal','eod_exit')", name="ck_order_origin"),
         CheckConstraint("(origin = 'signal') = (signal_id IS NOT NULL)", name="ck_order_origin_signal"),
         CheckConstraint("side IN ('buy','sell')", name="ck_order_side"),
-        CheckConstraint("qty > 0", name="ck_order_qty_positive"),
+        # Migration 0005: a FILLED order must have actually transacted shares; any
+        # other status (currently only 'rejected') may carry an informational qty
+        # (what was attempted/would have been, e.g. for insufficient_cash) or 0
+        # (e.g. price_exceeds_max_position, instrument_frozen_unresolved_eod).
+        CheckConstraint("(status = 'filled' AND qty > 0) OR (status <> 'filled' AND qty >= 0)",
+                        name="ck_order_qty_by_status"),
         CheckConstraint("status IN ('filled','rejected','cancelled')", name="ck_order_status"),
         CheckConstraint("(status = 'rejected') = (rejection_reason IS NOT NULL)",
                         name="ck_order_rejection_reason"),
+        CheckConstraint(
+            "rejection_reason IS NULL OR rejection_reason IN ("
+            "'price_exceeds_max_position','insufficient_cash','position_already_open',"
+            "'no_open_position_to_sell','execution_bar_missing','execution_bar_missing_eod',"
+            "'instrument_frozen_unresolved_eod')",
+            name="ck_order_rejection_reason_enum"),
         Index("ix_paper_orders_run", "strategy_run_id", "execution_ts"),
     )
 

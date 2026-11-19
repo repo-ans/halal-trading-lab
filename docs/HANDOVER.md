@@ -1,4 +1,4 @@
-# Handover — Stage A + B + C + D done (18 Nov 2026)
+# Handover — Stage A + B + C + D + E done (19 Nov 2026)
 
 Read `CLAUDE.md` first (decisions, rejected options, legal constraints). This file
 records what was built on top of it and what is still pending.
@@ -17,7 +17,9 @@ records what was built on top of it and what is still pending.
   done 2026-11-18.** Signals only -- no cash, sizing, fills, or orders. See below.
 - **Demo environment (isolated local DB + fixture compliance data, part of Stage
   H's scope done ahead of schedule): done 2026-11-18.** See below.
-- **Stage E onward: not started.**
+- **Stage E (paper-trading engine: sizing, fills, EOD exit, cash ledger): done
+  2026-11-19.** See below.
+- **Stage F onward: not started.**
 
 ## What exists
 ```
@@ -628,6 +630,112 @@ symbols -> `no_record`; the 6 fixtures -> `ok` x2, `expired`, `not_halal`,
 `/config` reports `demo`, `/jobs/backfill` returns 503, and the startup log shows
 no scheduler activity. `db_demo` stopped (container only -- the named volume
 persists, per CLAUDE.md/README's documented reset procedure) when finished.
+
+## Stage E: paper-trading engine (19 Nov 2026)
+
+Turns Stage D's signals into `paper_orders`/`paper_fills`: sizing, fills, EOD
+exit, the cash ledger. Pure core (`app/services/paper_engine.py::simulate_fills`)
+-- no DB/clock/compliance gate, same architecture as Stage D's `generate_signals`.
+Full rule write-up is in CLAUDE.md section 7's Stage E subsection; this is the
+build log.
+
+**A real bug caught before anything shipped:** the affordability check must be
+`qty*fill_price + commission <= cash`. An earlier draft also added
+`spread_cost`/`slippage_cost` to that check -- but both are reporting-only
+breakdowns already folded into `fill_price`, so that double-counted them and
+would have rejected trades that were actually affordable. Fixed, with a
+regression test that sets cash to exactly the correct total and confirms the
+order fills.
+
+**Sizing order of operations matters:** compute the adverse `fill_price` first,
+*then* `qty = floor(max_position_value / fill_price)` -- sizing off the raw open
+and adjusting afterward could let the $200 cap be exceeded by the bps
+adjustment. Proven with a fixture where `floor(200/raw_open)` and
+`floor(200/fill_price)` give different answers (3 vs. 2) and the engine takes
+the correct one. SELL always closes the entire open position, never re-sized
+against the cap.
+
+**EOD exit + freeze:** at every session's end, an open position gets a synthetic
+sell at that session's last bar. If that bar is missing, the order is rejected
+(`execution_bar_missing_eod`) and the instrument is frozen for the rest of the
+run (`instrument_frozen_unresolved_eod`) -- no later signal for it ever trades
+again, and no later session retries the exit. A regular signal-driven sell
+failing on a missing bar does NOT freeze the instrument (only an EOD-exit
+failure does) -- the position just stays open, and a later signal may still
+succeed.
+
+**Ordering** (engineering convention, not a business rule): the global event
+queue sorts by `(execution_ts, sells/EOD-checkpoints before buys,
+instrument_id)`. Tested directly: a higher-id instrument's same-bar sell frees
+the cash a lower-id instrument's same-bar buy needs, and the buy succeeds only
+because the sell is processed first.
+
+**Run-state locking:** `strategy_runs.paper_status`/`paper_completed_at`
+(migration 0005). `run_paper_engine` locks the row (`SELECT ... FOR UPDATE`),
+checks the status, writes everything, and flips it to `'completed'` in one
+transaction -- a second call, even on a zero-order run, raises
+`PaperEngineAlreadyRun` (409). Proven with a **real** concurrency test: two
+separate connections call `run_paper_engine` for the same run at (as close to)
+the same time, with the pure computation deliberately slowed down so they
+genuinely overlap -- exactly one succeeds, the other sees `'completed'` and
+raises, and exactly one set of orders/fills ever exists.
+
+**Ledger exactness:** `fill_price` is rounded to 4dp first
+(`app/services/money.py`); the cash movement gets no further rounding, and is
+provably exact -- a reconciliation test recomputes every `cash_balance_after`
+from the `paper_fills` rows alone (`starting_cash` + each movement) and requires
+byte-exact equality, not an approximate one.
+
+**Migration 0005**, applied to `db_test` first, full suite green, then
+production (`alembic current` shown before/after both times): the two paper-
+engine columns above; `paper_orders`' `qty` CHECK replaced with a status-
+conditional rule (`filled` implies `qty > 0`; anything else allows `qty >= 0`);
+a new CHECK enumerating every `rejection_reason` value; default values added for
+`commission_per_order`/`spread_bps`/`slippage_bps` (previously had none at all).
+
+**A real gap found and fixed while adding ownership checks to the new routes:**
+the existing Stage D routes (`GET /strategy-runs/{id}`, `/signals`, `/replay`)
+had NO ownership check at all -- any authenticated user could read or replay
+anyone else's strategy run. Retrofitted `strategy_runs.user_id == caller` onto
+all of them at once, alongside the three new routes
+(`POST /strategy-runs/{id}/paper-run`, `GET .../orders`, `GET .../fills`) that
+needed it from the start. A test proves an unauthorized caller gets 404 on
+every one of the six routes, and that the real owner still can.
+
+**Also found and fixed in this round, both pre-existing from earlier work, not
+new:**
+- `docker-compose.yml`'s `db_test`/`db_demo` ports were published as a bare
+  `"5433:5432"`/`"5434:5432"`, which Docker binds to `0.0.0.0` -- reachable from
+  the rest of the LAN with `postgres`/`postgres`. Changed to
+  `"127.0.0.1:PORT:PORT"`. An attempted `"[::1]:PORT:PORT"` IPv6 companion
+  binding turned out to be silently ignored by Docker Desktop on this stack
+  (confirmed via `docker inspect`) -- removed, and `app/config.py`'s
+  `test_database_url` default (plus every doc/script example) now uses the
+  literal `127.0.0.1`, never the hostname `"localhost"`, which resolves to the
+  unbound IPv6 loopback first and stalls every connection before falling back.
+- `test_strategy_runs_route.py`'s `authed` fixture built its fake user via
+  `lambda: AuthUser(id=uuid4(), ...)` -- a fresh random id on every request, not
+  once per test. Harmless before ownership checks existed; once they did, the
+  create call and a later get/replay call got treated as different users. Fixed
+  to compute the id once per test.
+- A real secrets exposure, unrelated to the above: `docker compose config`,
+  used once to inspect `db_demo`'s settings, also re-renders and interpolates
+  the `backend` service's `.env` values -- it printed the real Supabase
+  Postgres password and `JOB_SECRET` in plaintext to a tool-output transcript.
+  The temp file it was written to was deleted immediately; the DB password and
+  `JOB_SECRET` were rotated afterward. CLAUDE.md section 12 now has a hard rule
+  against ever running `docker compose config`/`env`/`printenv`/`cat .env`;
+  `docker inspect`/`docker port` cover the same container/port checks safely.
+
+**Tests:** `test_paper_engine.py` (16, pure -- hand-computed buy/sell, the
+affordability-bug regression, sizing order-of-operations, EOD exit + freeze,
+ordering, ledger reconciliation, determinism, the no-compliance-import static
+guard), `test_paper_engine_service.py` (5, DB-writing, including the real
+concurrency test), `test_paper_engine_constraints.py` (5, DB-level CHECK
+proofs), `test_paper_engine_route.py` (3, HTTP, including the all-six-routes
+ownership test). Must-pass tests 1, 2, 5 and 7 are now real, not xfail --
+test_must_pass.py has zero xfail placeholders left. Full backend suite: 250
+passed, 1 skipped (opt-in live RLS check), 0 failed.
 
 ## Open items / notes
 - **Stage C was never actually committed.** `git add` + the secret-scan checks were

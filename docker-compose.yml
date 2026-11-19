@@ -22,7 +22,13 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: halal_test
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"  # loopback only -- a bare "5433:5432" binds 0.0.0.0,
+                               # reachable from the rest of the LAN with postgres/postgres.
+                               # IPv4 only: Docker Desktop on this stack doesn't honor an
+                               # "[::1]:..." binding, so always connect with the literal
+                               # "127.0.0.1", never the hostname "localhost" (which
+                               # resolves to the IPv6 loopback first and stalls every
+                               # connection before falling back) -- see app/config.py.
     tmpfs:
       - /var/lib/postgresql/data
 
@@ -39,7 +45,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: halal_demo
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"  # loopback only, IPv4 -- see db_test's comment above
     volumes:
       - demo_pgdata:/var/lib/postgresql/data
 

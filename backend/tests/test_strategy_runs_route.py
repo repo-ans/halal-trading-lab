@@ -39,7 +39,13 @@ def authed(db_conn):
     def _fake_session():
         yield db_conn
 
-    app.dependency_overrides[current_user] = lambda: AuthUser(id=uuid4(), email="t@example.com")
+    # Fixed per-test id, computed once -- a lambda re-calling uuid4() on every
+    # request would hand out a DIFFERENT "user" to the create vs. a later get/
+    # replay call, which an ownership check (added for Stage E's paper-engine
+    # routes, and retrofitted onto these) would then correctly see as someone
+    # else's run and 404 -- this bit a real test here, not a hypothetical.
+    user_id = uuid4()
+    app.dependency_overrides[current_user] = lambda: AuthUser(id=user_id, email="t@example.com")
     app.dependency_overrides[get_session] = _fake_session
     return db_conn
 

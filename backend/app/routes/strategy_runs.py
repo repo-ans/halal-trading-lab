@@ -7,12 +7,16 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth import AuthUser, current_user
 from app.db import get_session
+from app.models.paper import PaperFill, PaperOrder
 from app.models.strategy import Signal, StrategyRun
+from app.services.paper_engine import PaperEngineAlreadyRun
+from app.services.paper_engine import StrategyRunNotFound as PaperStrategyRunNotFound
+from app.services.paper_engine import run_paper_engine
 from app.services.strategy_run import (
     CurrencyMismatch,
     StrategyRunNotFound,
@@ -23,6 +27,15 @@ from app.services.strategy_run import (
 )
 
 router = APIRouter(prefix="/strategy-runs")
+
+
+def _get_owned_run(session: Session, run_id: int, user: AuthUser) -> StrategyRun:
+    """Ownership is strategy_runs.user_id -- never leak whether a run exists to
+    someone who doesn't own it: not-found and not-yours both return 404."""
+    run = session.get(StrategyRun, run_id)
+    if run is None or run.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "strategy run not found")
+    return run
 
 
 class StrategyRunIn(BaseModel):
@@ -140,9 +153,7 @@ def get_strategy_run(
     user: AuthUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> StrategyRunOut:
-    run = session.get(StrategyRun, run_id)
-    if run is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "strategy run not found")
+    run = _get_owned_run(session, run_id, user)
     return _to_out(run)
 
 
@@ -152,9 +163,7 @@ def get_strategy_run_signals(
     user: AuthUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> list[SignalOut]:
-    run = session.get(StrategyRun, run_id)
-    if run is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "strategy run not found")
+    _get_owned_run(session, run_id, user)
 
     rows = session.scalars(
         select(Signal).where(Signal.strategy_run_id == run_id)
@@ -176,6 +185,7 @@ def replay_run(
     user: AuthUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> StrategyRunOut:
+    _get_owned_run(session, run_id, user)
     now = datetime.now(timezone.utc)
     try:
         run = replay_strategy_run(session, run_id, now)
@@ -189,3 +199,110 @@ def replay_run(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, _to_out(run).model_dump())
 
     return _to_out(run)
+
+
+class PaperRunOut(BaseModel):
+    id: int
+    paper_status: str
+    paper_completed_at: str | None
+    order_count: int
+    fill_count: int
+
+
+class PaperOrderOut(BaseModel):
+    id: int
+    instrument_id: int
+    signal_id: int | None
+    origin: str
+    side: str
+    qty: str
+    intended_price: str | None
+    execution_ts: str
+    status: str
+    rejection_reason: str | None
+
+
+class PaperFillOut(BaseModel):
+    id: int
+    order_id: int
+    instrument_id: int
+    side: str
+    fill_ts: str
+    fill_price: str
+    qty: str
+    commission: str
+    spread_cost: str
+    slippage_cost: str
+    cash_balance_after: str
+
+
+@router.post("/{run_id}/paper-run", response_model=PaperRunOut, status_code=status.HTTP_201_CREATED)
+def paper_run(
+    run_id: int,
+    user: AuthUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> PaperRunOut:
+    _get_owned_run(session, run_id, user)
+    now = datetime.now(timezone.utc)
+    try:
+        run = run_paper_engine(session, run_id, now)
+    except PaperStrategyRunNotFound:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "strategy run not found")
+    except PaperEngineAlreadyRun:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "the paper engine has already run for this strategy run")
+
+    order_count = session.scalar(
+        select(func.count()).select_from(PaperOrder).where(PaperOrder.strategy_run_id == run_id))
+    fill_count = session.scalar(
+        select(func.count()).select_from(PaperFill).join(PaperOrder)
+        .where(PaperOrder.strategy_run_id == run_id))
+    return PaperRunOut(
+        id=run.id, paper_status=run.paper_status, paper_completed_at=_iso(run.paper_completed_at),
+        order_count=order_count, fill_count=fill_count,
+    )
+
+
+@router.get("/{run_id}/orders", response_model=list[PaperOrderOut])
+def get_paper_orders(
+    run_id: int,
+    user: AuthUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> list[PaperOrderOut]:
+    _get_owned_run(session, run_id, user)
+    rows = session.scalars(
+        select(PaperOrder).where(PaperOrder.strategy_run_id == run_id)
+        .order_by(PaperOrder.execution_ts, PaperOrder.instrument_id)
+    ).all()
+    return [
+        PaperOrderOut(
+            id=r.id, instrument_id=r.instrument_id, signal_id=r.signal_id, origin=r.origin,
+            side=r.side, qty=str(r.qty), intended_price=None if r.intended_price is None else str(r.intended_price),
+            execution_ts=_iso(r.execution_ts), status=r.status, rejection_reason=r.rejection_reason,
+        )
+        for r in rows
+    ]
+
+
+@router.get("/{run_id}/fills", response_model=list[PaperFillOut])
+def get_paper_fills(
+    run_id: int,
+    user: AuthUser = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> list[PaperFillOut]:
+    _get_owned_run(session, run_id, user)
+    rows = session.execute(
+        select(PaperFill, PaperOrder.instrument_id, PaperOrder.side)
+        .join(PaperOrder, PaperFill.order_id == PaperOrder.id)
+        .where(PaperOrder.strategy_run_id == run_id)
+        .order_by(PaperFill.fill_ts, PaperOrder.instrument_id)
+    ).all()
+    return [
+        PaperFillOut(
+            id=fill.id, order_id=fill.order_id, instrument_id=instrument_id, side=side,
+            fill_ts=_iso(fill.fill_ts), fill_price=str(fill.fill_price), qty=str(fill.qty),
+            commission=str(fill.commission), spread_cost=str(fill.spread_cost),
+            slippage_cost=str(fill.slippage_cost), cash_balance_after=str(fill.cash_balance_after),
+        )
+        for fill, instrument_id, side in rows
+    ]

@@ -18,7 +18,7 @@ READ ONLY) and only ever SELECTed from.
 
 Usage (PowerShell):
     $env:APP_MODE = "demo"
-    $env:DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5434/halal_demo"
+    $env:DATABASE_URL = "postgresql+psycopg://postgres:postgres@127.0.0.1:5434/halal_demo"
     $env:SOURCE_DATABASE_URL = "<production DATABASE_URL>"   # or omit to be prompted
     python scripts/seed_demo.py
 """
