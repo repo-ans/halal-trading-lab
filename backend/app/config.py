@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,6 +41,22 @@ class Settings(BaseSettings):
     admin_user_ids: str = ""
     # UNCONFIRMED ASSUMPTION (CLAUDE.md section 5): 90 days, owner has not confirmed.
     compliance_default_validity_days: int = 90
+
+    # Stage G. SecretStr -- pydantic masks the value in repr()/str(), including
+    # in a logged or printed Settings object; app/services/ai_summary_llm.py is
+    # the only code that ever calls .get_secret_value() on it, and never logs
+    # or re-raises that value. Empty means LLM mode is unavailable outright
+    # (template-only), same fail-closed shape as ALLOW_DEV_DATA_SOURCE.
+    ai_api_key: SecretStr = SecretStr("")
+    # Open CEO decision (CLAUDE.md section 11): which model. Defaults to the
+    # cheapest current Claude model -- this is "turn already-computed numbers
+    # into a few sentences", not open-ended reasoning.
+    ai_model: str = "claude-haiku-5-5"
+    ai_summary_timeout_seconds: float = 15.0
+    # Soft cost-protection, not a hard security boundary: every LLM attempt
+    # (success, failure, or guard rejection) counts against this, per user,
+    # per rolling 24h -- see app/services/ai_summary.py.
+    ai_summary_daily_cap: int = 5
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -300,7 +300,10 @@ money and price columns `NUMERIC(18,4)` — never `float`/`double`.
 7. **`paper_fills`** — order_id, fill price, qty, commission, spread cost, slippage
    cost, cash balance after. This table is the cash ledger's audit trail.
 8. **`ai_reports`** — strategy_run_id, generated text, and the exact computed metrics
-   the text was generated from (Stage G)
+   the text was generated from (Stage G). Migration 0006 added `mode`,
+   `requested_mode`, `llm_attempts`, `model_version`, `prompt_version`,
+   `input_hash`, with `UNIQUE(strategy_run_id, requested_mode)` — see §7's Stage
+   G subsection.
 
 Sizing check: 20 symbols × 78 bars/day × 250 days ≈ 390k rows/year ≈ ~40 MB.
 Supabase's free 500 MB is fine for several years.
@@ -488,6 +491,160 @@ original run's `compliance_check_ids`/`blocked_instruments` straight across and
 record expiring between the original run and a later replay cannot change the
 replay's outcome, by construction, not by coincidence.
 
+### Stage F: metrics, Virtual Trades, CSV export — done 2026-11-19
+
+`app/services/metrics.py::compute_metrics` is Decimal, computed server-side from
+`paper_orders`/`paper_fills` only -- never `price_bars`, never a live price.
+
+**Equity curve is REALIZED, not cash-ledger.** A cash-ledger curve (cash after
+every fill, buys included) shows the cost of opening a position as an instant
+"loss" before anything is actually lost -- buying 2 shares for ~$300 out of
+$1000 would plot as a ~70% drawdown on day one. The curve instead starts at
+`starting_cash` and adds one point per CLOSED round trip (a filled buy paired
+with the filled sell that closed it), moved by that trade's own realized P&L --
+never a point at the buy. `max_drawdown` is computed on this curve. Cost: it
+does not reflect an open position's paper gains or losses while open, or at all
+if the position is never closed -- stated as a caveat next to the chart, not
+hidden.
+
+**An unresolved position is excluded entirely**, not counted as a trade or a
+loss: not in `trades_count`, not in `realized_pnl`, no point on the curve. Its
+fees (already paid) still count in `total_fees` -- that money is genuinely
+spent regardless of whether the position ever resolves. Unresolved positions
+only ever arise from Stage E's EOD-exit freeze.
+
+**Nullable metrics.** The API returns `null` (never the string `"no trades"`)
+for `total_return`, `realized_pnl`, `win_rate`, `avg_win`, `avg_non_win` when
+undefined -- `win_rate`/`avg_win`/`avg_non_win` are null independently (e.g.
+one closed trade that lost gives a defined `win_rate` of `0.0000` but a null
+`avg_win`, since there's nothing to average). `trades_count`, `total_fees`,
+`max_drawdown`, `unresolved_positions` are always real numbers, never null --
+each is well-defined even with zero trades. `avg_loss` is named `avg_non_win`:
+its population is every closed trade with `pnl <= 0` (losses AND breakeven
+trades) -- a breakeven trade is not a win, so it can't be excluded from both
+buckets.
+
+**CSV export** (`GET /strategy-runs/{id}/orders.csv`, `.../fills.csv`,
+`app/services/csv_safety.py`): two distinct rules for two distinct kinds of
+cell, never conflated. `csv_safe` (free text only -- instrument symbol/name,
+the plain-language rejection message) prefixes `'` if the value starts with
+`= + - @` or a tab/CR. `numeric_cell` (qty, prices, cash balances) instead
+*asserts* the value matches `^-?\d+(\.\d+)?$` and passes it through raw --
+applying `csv_safe` there too would prefix a legitimate negative number (`-`
+is itself a trigger character), corrupting real P&L/cash figures. Both files
+include a `run_id` column. The run's config and the paper-trading disclaimer
+are never embedded in the CSV itself -- they're shown on the page, above the
+download button.
+
+**Plain-language rejection text** (`app/services/rejection_messages.py`) is one
+shared source for the Virtual Trades table and the CSV export, so the two can
+never say something different about the same code. `price_exceeds_max_position`
+is the one reason that's parameterized -- it names both the actual price and
+the configured cap, not just the generic reason.
+
+**Strategy Lab's price warning**: `GET /watchlist` gained `latest_close`
+(Decimal-as-string) so the picker can show, next to each instrument's gate
+status, whether its last close already exceeds the currently-entered max
+position value -- entirely a read of existing `price_bars` data, no new
+computation.
+
+**`GET /strategy-runs`** (own runs only, paginated) backs the Dashboard /
+Virtual Trades run picker -- same ownership rule as every other `/strategy-runs`
+route. **`GET /strategy-runs/{id}/metrics` returns 409**, not an empty/zero
+result, when `paper_status != 'completed'` -- there is nothing to compute yet,
+and a 409 says so instead of silently rendering a misleading "no trades".
+
+No new migration -- every Stage F addition reads existing Stage D/E columns;
+nothing new is stored.
+
+### Stage G: AI-generated summaries — done 2026-11-20
+
+Two modes, both producing the same `AiReport` shape: `template` (always available,
+deterministic, no network call) and `llm` (sends only the already-computed metrics
+to Anthropic's API; falls back to `template` on any failure or missing key, and the
+fallback is always labeled `mode="template"`, never mislabeled as `"llm"`).
+
+**Number safety is the core design constraint.** Neither the LLM nor the template
+is ever allowed to write a digit or a number word into the text a user reads.
+Both produce RAW text containing only whitelisted `{placeholder}` tokens (e.g.
+`{trades_count}`, `{realized_pnl}`); `app/services/ai_summary_input.py`'s
+`ALLOWED_PLACEHOLDERS` is the fixed whitelist, and trusted code substitutes the
+real values only after the raw text has passed every guard. This means a model
+can describe a run in prose but can never put its own number into what the user
+reads -- the numbers always come from the same computed metrics Stage F already
+produced, never from the model's own arithmetic.
+
+**Guards** (`app/services/ai_summary_guards.py`), run on the RAW (pre-substitution)
+text from both modes:
+- No digit, no number word (`zero`..`twenty`, tens, `hundred`, `thousand`,
+  `million`, ordinals) anywhere in the raw text.
+- No placeholder outside `ALLOWED_PLACEHOLDERS`.
+- No banned phrase -- word-boundary regex, not substring (so "learned" and
+  "unpredictable" pass), covering `should`/`recommend`/`advise`/`likely`/
+  `expected`/`forecast`/`opportunity`/`predict`/`profit`/`guarantee`/`halal`/
+  `haram`/"you should buy|sell"/"will rise|fall|go up|go down", plus any URL.
+- Text is normalized with Unicode NFKC and has zero-width characters
+  (`​‌‍﻿⁠`) stripped BEFORE matching, so a homoglyph or a
+  zero-width character inserted mid-word cannot slip a banned word past the regex.
+- Length-capped (`MAX_GENERATED_PORTION_CHARS = 1500`) before any of the above.
+
+The app never computes or infers a halal ruling itself (§5) -- the banned-phrase
+list enforces that the summary can't either.
+
+**Cost cap** (migration 0006): `ai_reports` gained `requested_mode`,
+`llm_attempts` (every attempt -- success, failure, or guard rejection, all
+count), `model_version`, `prompt_version`, `input_hash`, with
+`UNIQUE(strategy_run_id, requested_mode)`. `generate_or_fetch_ai_summary` locks
+the `strategy_runs` row (`SELECT ... FOR UPDATE`) before deciding whether to
+call the LLM, so two simultaneous requests for the same run cause exactly one
+LLM call, proven with a real two-thread/two-connection test, not a mock. A
+repeat request may retry the LLM only while `llm_attempts < 3` on that row AND
+the caller's per-user rolling-24h daily cap (`ai_summary_daily_cap`, default 5,
+counted via `SUM(llm_attempts)`) is not hit; once either limit is hit, every
+further request for that run silently gets the `template` fallback instead of
+erroring.
+
+**Heading by mode** (`HEADING_BY_MODE` in `app/services/ai_summary.py`):
+template -> "Plain-language summary of a simulated result (automatic, no AI)";
+llm -> "AI-generated explanation of a simulated result". The heading is always
+picked from the report's ACTUAL `mode`, never its `requested_mode` -- a
+fallback always shows the template heading, so a user can never be shown AI
+-labeled text that wasn't actually AI-generated.
+
+**Secret handling**: `ai_api_key` is a `SecretStr` (`app/config.py`) -- empty
+means LLM mode is unavailable outright (fail-closed, same shape as
+`ALLOW_DEV_DATA_SOURCE`). `app/services/ai_summary_llm.py` is the only code that
+ever calls `.get_secret_value()`, and never logs or re-raises the raw value;
+tested that `repr()`/`str()` of the `Settings` object, and of every exception
+raised on the LLM call path, never contain the key.
+
+**Rendering**: the frontend (`AiSummaryPanel.tsx`) renders `report_text` as
+plain text only -- a React text child, never `dangerouslySetInnerHTML`, never a
+markdown-to-HTML step. A render test proves a `<script>` string in `report_text`
+produces zero `<script>` DOM elements and shows up as literal visible text.
+
+**Disclosure, shown next to the mode selector** (and here, so this file and the
+UI never drift apart): *"LLM mode sends the numbers above to an external
+service. Template mode sends nothing."*
+
+**Prompt version guard**: `PROMPT_VERSION = "ai-summary-v1"` (`app/services/
+ai_summary_template.py`) is hashed into `config_hash`-style pinning for the
+template text itself -- a test pins a hash of the rendered template output
+against a fixed fixture, so changing the wording fails the test until
+`PROMPT_VERSION` is bumped and the pinned hash is updated on purpose, mirroring
+`STRATEGY_RULES_VERSION`'s role in §7's `config_hash`.
+
+**Ownership**: `POST /strategy-runs/{id}/ai-summary` and
+`GET /strategy-runs/{id}/ai-summary` both use the same ownership check as every
+other `/strategy-runs/*` route (§7's Stage E note) -- not found and not-yours
+both return 404.
+
+**No point-in-time reporting on live price/compliance data**: the summary is
+generated entirely from `paper_orders`/`paper_fills`/Stage F's computed
+`metrics`, exactly like the metrics themselves (never `price_bars`, never a
+live price, never a fresh compliance lookup) -- see Stage F's note above on
+`compute_metrics`.
+
 ---
 
 ## 8. Time, calendars, and money
@@ -552,8 +709,8 @@ interpolate, or fall back to the last known price to keep a run alive.
 | C | Compliance form, evidence, expiry, order blocking | Done 2026-11-18 (gate + admin-only writes + CSV import + watchlist UI) |
 | D | 5/20 MA strategy, next-bar execution, deterministic | Done 2026-11-18 (signal generation only; no cash/sizing/fills/orders -- that's Stage E) |
 | E | Paper engine: cash ledger, positions, fills, EOD exit, costs | Done 2026-11-19 (sizing, fills, EOD exit + freeze, cash ledger, ownership checks retrofitted onto Stage D too) |
-| F | Dashboard: watchlist, results, trade history, CSV export | Not started |
-| G | AI review — plain-language summaries from computed metrics only | Not started |
+| F | Dashboard: watchlist, results, trade history, CSV export | Done 2026-11-19 (Strategy Lab, Virtual Trades, Dashboard, realized equity curve, CSV export, no new migration) |
+| G | AI review — plain-language summaries from computed metrics only | Done 2026-11-20 (number-safety placeholder substitution, phrase guard, cost cap with row-lock + daily cap, SecretStr key, plain-text-only rendering, migration 0006 on db_test and production) |
 | H | Automated tests, security checks, demo data, licence check | Demo data done 2026-11-18 (ahead of schedule, built between D and E so E-G can be demoed in isolation — see §5's "Demo environment fixtures" and the README); tests/security/licence check not started |
 
 Target milestones: wk 1 requirements + provider decision · wk 2 watchlist +
@@ -604,6 +761,10 @@ summaries · wk 6 owner pilot (virtual funds only).
   ruling. Pass it numbers the code already calculated — never raw bars to "analyse".
 - Every screen needs the disclaimer: *paper trading only, not financial advice,
   halal status from a third party and not our own ruling.*
+- **Stage G disclosure**, shown next to the AI summary's mode selector: *"LLM
+  mode sends the numbers above to an external service. Template mode sends
+  nothing."* Keep this in sync with `frontend/src/components/AiSummaryPanel.tsx`
+  and README.md if the wording changes.
 - **Never run a command that expands environment variables or `.env` contents into
   its output** — `docker compose config`, `env`, `printenv`, `cat .env` (or any
   editor/pager on it), `set` with no args, and the like. `docker compose config`

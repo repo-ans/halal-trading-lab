@@ -5,10 +5,17 @@ import DemoBanner from "./components/DemoBanner";
 import Disclaimer from "./components/Disclaimer";
 import { apiFetch } from "./lib/api";
 import { supabase } from "./lib/supabase";
+import Dashboard from "./pages/Dashboard";
 import InstrumentChart from "./pages/InstrumentChart";
 import Login from "./pages/Login";
+import StrategyLab from "./pages/StrategyLab";
+import VirtualTrades from "./pages/VirtualTrades";
 import Watchlist from "./pages/Watchlist";
 import type { Instrument } from "./types";
+
+// No router (Stage B2 decision, still true): a plain tab switch, same as how
+// Watchlist/InstrumentChart already toggle via local state.
+type Screen = "watchlist" | "strategy-lab" | "virtual-trades" | "dashboard";
 
 function Home({ session }: { session: Session }) {
   const me = useQuery({
@@ -16,7 +23,14 @@ function Home({ session }: { session: Session }) {
     queryFn: () =>
       apiFetch<{ id: string; email: string | null; is_admin: boolean }>("/me", session.access_token),
   });
-  const [selected, setSelected] = useState<Instrument | null>(null);
+  const [screen, setScreen] = useState<Screen>("watchlist");
+  const [selectedInstrument, setSelectedInstrument] = useState<Instrument | null>(null);
+  const [activeRunId, setActiveRunId] = useState<number | null>(null);
+
+  function goToScreen(next: Screen) {
+    setSelectedInstrument(null);
+    setScreen(next);
+  }
 
   return (
     <div>
@@ -30,10 +44,41 @@ function Home({ session }: { session: Session }) {
         </div>
       </div>
 
-      {!me.data ? null : selected ? (
-        <InstrumentChart session={session} instrument={selected} onBack={() => setSelected(null)} />
+      {me.data && (
+        <nav style={{ display: "flex", gap: 8, margin: "12px 0" }}>
+          {([
+            ["watchlist", "Watchlist"],
+            ["strategy-lab", "Strategy Lab"],
+            ["virtual-trades", "Virtual Trades"],
+            ["dashboard", "Dashboard"],
+          ] as const).map(([key, label]) => (
+            <button key={key} disabled={screen === key} onClick={() => goToScreen(key)}>
+              {label}
+            </button>
+          ))}
+        </nav>
+      )}
+
+      {!me.data ? null : selectedInstrument ? (
+        <InstrumentChart
+          session={session}
+          instrument={selectedInstrument}
+          onBack={() => setSelectedInstrument(null)}
+        />
+      ) : screen === "watchlist" ? (
+        <Watchlist session={session} isAdmin={me.data.is_admin} onSelect={setSelectedInstrument} />
+      ) : screen === "strategy-lab" ? (
+        <StrategyLab
+          session={session}
+          onRunReady={(runId) => {
+            setActiveRunId(runId);
+            goToScreen("virtual-trades");
+          }}
+        />
+      ) : screen === "virtual-trades" ? (
+        <VirtualTrades session={session} runId={activeRunId} onSelectRun={setActiveRunId} />
       ) : (
-        <Watchlist session={session} isAdmin={me.data.is_admin} onSelect={setSelected} />
+        <Dashboard session={session} runId={activeRunId} onSelectRun={setActiveRunId} />
       )}
     </div>
   );

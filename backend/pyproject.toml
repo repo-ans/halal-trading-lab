@@ -15,6 +15,7 @@ dependencies = [
     "pyjwt[crypto]>=2.9",
     "yfinance>=0.2.40",
     "python-multipart>=0.0.12",
+    "anthropic>=0.40",
 ]
 
 [project.optional-dependencies]

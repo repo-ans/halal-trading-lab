@@ -38,7 +38,99 @@ export interface WatchlistRow {
   expires_at: string | null;
   days_until_expiry: number | null;
   latest_bar_ts: string | null;
+  latest_close: string | null; // Stage F: Strategy Lab's price-vs-cap warning
   evidence_url: string | null;
+}
+
+// Matches backend/app/routes/strategy_runs.py's StrategyRunOut exactly.
+export interface StrategyRun {
+  id: number;
+  status: "pending" | "running" | "completed" | "failed";
+  error: string | null;
+  config_hash: string;
+  instrument_ids: number[];
+  range_start: string;
+  range_end: string;
+  fast_period: number;
+  slow_period: number;
+  reset_ma_each_session: boolean;
+  blocked_instruments: Record<string, string>;
+  compliance_check_ids: Record<string, number>;
+  started_at: string | null;
+  finished_at: string | null;
+  paper_status: "not_run" | "completed";
+  paper_completed_at: string | null;
+  max_position_value: string;
+}
+
+export interface StrategyRunListResult {
+  items: StrategyRun[];
+  total: number;
+}
+
+export interface PaperRunResult {
+  id: number;
+  paper_status: "not_run" | "completed";
+  paper_completed_at: string | null;
+  order_count: number;
+  fill_count: number;
+}
+
+export type PaperOrderStatus = "filled" | "rejected" | "cancelled";
+
+export interface PaperOrder {
+  id: number;
+  instrument_id: number;
+  signal_id: number | null;
+  origin: "signal" | "eod_exit";
+  side: "buy" | "sell";
+  qty: string;
+  intended_price: string | null;
+  execution_ts: string;
+  status: PaperOrderStatus;
+  rejection_reason: string | null;
+  rejection_message: string | null; // plain language, same text the CSV export uses
+}
+
+export interface PaperOrdersPage {
+  items: PaperOrder[];
+  total: number;
+}
+
+export interface EquityPoint {
+  ts: string;
+  cash: string;
+}
+
+// Decimal-as-string when defined; null means "no trades" (or, for avg_win/
+// avg_non_win, "no trades in that specific bucket") -- the API never renders
+// that as a string itself (Stage F plan correction 3).
+export type AiSummaryMode = "template" | "llm";
+
+// Matches backend/app/routes/strategy_runs.py's AiSummaryOut exactly.
+export interface AiSummary {
+  id: number;
+  mode: AiSummaryMode; // what was actually rendered -- never "llm" for a fallback
+  requested_mode: AiSummaryMode;
+  heading: string;
+  report_text: string;
+  llm_attempts: number;
+  generated_at: string;
+  fallback_occurred: boolean;
+}
+
+export interface Metrics {
+  trades_count: number;
+  realized_pnl: string | null;
+  total_return: string | null;
+  win_rate: string | null;
+  avg_win: string | null;
+  avg_non_win: string | null;
+  total_fees: string;
+  max_drawdown: string;
+  unresolved_positions: number;
+  unresolved_instrument_ids: number[];
+  equity_curve: EquityPoint[];
 }
 
 export interface CsvRowResult {

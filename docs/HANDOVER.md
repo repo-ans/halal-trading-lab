@@ -1,4 +1,4 @@
-# Handover — Stage A + B + C + D + E done (19 Nov 2026)
+# Handover — Stage A through G done (20 Nov 2026)
 
 Read `CLAUDE.md` first (decisions, rejected options, legal constraints). This file
 records what was built on top of it and what is still pending.
@@ -19,7 +19,12 @@ records what was built on top of it and what is still pending.
   H's scope done ahead of schedule): done 2026-11-18.** See below.
 - **Stage E (paper-trading engine: sizing, fills, EOD exit, cash ledger): done
   2026-11-19.** See below.
-- **Stage F onward: not started.**
+- **Stage F (Strategy Lab, Virtual Trades, Dashboard, metrics, CSV export): done
+  2026-11-19.** See below.
+- **Stage G (AI-generated run summaries, migration 0006): done 2026-11-20.** See
+  below. **Stage H onward: not started** (tests/security/licence check from
+  Stage H's original scope remain pending; demo data was already done ahead of
+  schedule, see Stage C's entry above).
 
 ## What exists
 ```
@@ -736,6 +741,173 @@ proofs), `test_paper_engine_route.py` (3, HTTP, including the all-six-routes
 ownership test). Must-pass tests 1, 2, 5 and 7 are now real, not xfail --
 test_must_pass.py has zero xfail placeholders left. Full backend suite: 250
 passed, 1 skipped (opt-in live RLS check), 0 failed.
+
+## Stage F: Strategy Lab, Virtual Trades, Dashboard, CSV export (19 Nov 2026)
+
+No new migration -- everything reads Stage D/E's existing columns.
+
+**Metrics** (`app/services/metrics.py`): server-side Decimal, from
+`paper_orders`/`paper_fills` only. The approved plan's first draft used a
+cash-ledger equity curve; the owner caught a real design bug in it before any
+code was written -- a cash-ledger curve plots the cost of OPENING a position as
+an instant loss (buy 2 shares, cash 1000 -> ~298, a fake ~70% drawdown) even
+though nothing has actually been lost yet. Replaced with a REALIZED curve:
+`starting_cash` plus one point per CLOSED round trip, moved by that trade's own
+P&L -- verified live in the browser (see below) with a 2-share, ~$300 buy that
+produced no dip at all on the chart, only a small step down at the eventual
+sell. An unresolved position (Stage E's EOD-freeze case) is excluded from every
+realized metric entirely -- not a trade, not a loss, no curve point -- proven
+with a dedicated fixture. The API returns `null`, never the string `"no
+trades"`, for the five metrics that can be undefined; `avg_loss` was renamed
+`avg_non_win` (its population is losses AND breakeven trades, matching
+`win_rate`'s own "breakeven is not a win" rule).
+
+**CSV export**: `app/services/csv_safety.py` splits escaping into two rules --
+`csv_safe` for free text (instrument symbol, the plain-language reason),
+`numeric_cell` for numbers (asserts the value matches `^-?\d+(\.\d+)?$` and
+passes it through raw). A blanket "escape everything" approach was explicitly
+rejected because a negative number starts with `-`, one of the trigger
+characters -- it would have corrupted every negative P&L figure. Both CSVs gained
+a `run_id` column. The run's config and the paper-trading disclaimer are shown
+on the page, not embedded in the file.
+
+**Plain-language rejection messages** (`app/services/rejection_messages.py`):
+one shared source for Virtual Trades and the CSV, so they can't drift apart.
+`price_exceeds_max_position` is parameterized with the actual price and cap,
+not just the generic sentence -- confirmed live (see below).
+
+**Strategy Lab's price warning**: `GET /watchlist` gained `latest_close`; the
+picker shows it next to each instrument's gate status and warns inline when it
+already exceeds the currently-entered max position value.
+
+**New routes**, all via the existing `_get_owned_run` ownership check:
+`GET /strategy-runs` (own runs, paginated -- backs the run picker),
+`GET /strategy-runs/{id}/metrics` (409, not an empty result, when
+`paper_status != 'completed'`), `GET /strategy-runs/{id}/orders.csv`,
+`GET /strategy-runs/{id}/fills.csv`. `GET .../orders` gained pagination and
+`instrument_id`/`status` filters, plus a `rejection_message` field, and its
+response shape changed from a bare list to `{items, total}` -- the one
+intentionally-breaking change in this round, since Stage E's own route needed
+pagination info too.
+
+**Frontend**: no router (still the Stage B2 decision) -- a plain tab switch in
+`App.tsx`, same pattern `Watchlist`/`InstrumentChart` already used.
+`StrategyLab.tsx` creates a run then immediately chains `POST .../paper-run`;
+if that second call fails, a "Retry paper engine" button retries only that
+step, never re-creates the run. `VirtualTrades.tsx` and `Dashboard.tsx` share
+`RunPicker.tsx` (`GET /strategy-runs`) and both distinguish `paper_status ==
+'not_run'` (a CTA to run the engine) from a real zero-order result (an
+explicit "no signals" message) -- collapsing those two into one empty state
+was the specific mistake the plan called out to avoid. `EquityCurveChart.tsx`
+reuses lightweight-charts' `LineSeries` (CLAUDE.md section 2: one charting
+library for the whole app, never a second one for this).
+
+**Verified live in the browser**, against `db_demo` (never production -- a
+backend was started in `APP_MODE=demo` pointed at a freshly-migrated
+`db_demo`): ran `DEMO-OK` over Nov 16-17 with `max_position_value=1000` end to
+end through the actual UI -- the $200-cap price warning correctly fired for
+every instrument at the default cap and correctly cleared once raised to 1000;
+"Simulated result: run #3 created"; Strategy Lab auto-chained into the paper
+engine and landed on Virtual Trades showing all 9 orders, including the plain-
+language "There was no open position to sell." rejection message; the
+Dashboard showed realized P&L -$14.2876, 4 trades, 0% win rate, "no trades" for
+`avg_win` (there were none), and an equity curve that steps down smoothly at
+each of the 4 trade closes with no instant drop at any buy -- the exact bug
+pattern the corrected design was meant to avoid, confirmed absent. The run
+picker correctly listed only runs created through the browser's own session,
+not the two created earlier by a script using unrelated random user ids --
+confirming the ownership filter live, not just in tests.
+
+**Tests**: `test_metrics.py` (5, DB-writing), `test_rejection_messages.py` (5,
+pure), `test_csv_safety.py` (10, pure), `test_stage_f_routes.py` (6, HTTP,
+including hostile-symbol CSV escaping), extensions to
+`test_paper_engine_route.py`'s ownership test (3 new routes). Frontend:
+`metrics.test.ts` (4, pure formatting) and `wording.test.ts` (7, a static scan
+over the three new pages for banned phrases like "you would have made",
+mirroring `test_market_calendar.py`'s hardcoded-session-time scan). Full
+backend suite: 286 passed, 1 skipped, 0 failed. Frontend: `npm run build` and
+`npm run test` both pass (14 tests).
+
+## Stage G: AI-generated run summaries (20 Nov 2026)
+
+Migration 0006: `ai_reports` gained `mode`, `requested_mode`, `llm_attempts`,
+`model_version`, `prompt_version`, `input_hash`, `UNIQUE(strategy_run_id,
+requested_mode)`. Applied to `db_test` first (full suite green), then to
+production, `alembic current` shown before and after both -- see CLAUDE.md §7's
+Stage G subsection for the full design writeup (number-safety placeholder
+substitution, the phrase guard, the cost cap). This note covers only what isn't
+already there: build order, the two real bugs this round, and live verification.
+
+**The approved plan arrived with 8 numbered corrections already applied** (the
+owner reviewed the first draft before any code was written) -- the original
+draft's weak point was a "1% numeric tolerance" check on the model's raw output,
+which the owner replaced outright with the placeholder-substitution design:
+the model never writes a digit at all, so there is no tolerance to get wrong.
+
+**Two real bugs caught before shipping, both the kind unit tests alone would
+have missed:**
+1. The banned-phrase list was a first draft away from matching "learned" and
+   "unpredictable" as substring hits on "earn"/"predict" -- switched to
+   word-boundary regex specifically because of this, with both words as
+   explicit test cases so a future edit can't reintroduce the bug.
+2. A homoglyph (fullwidth "ｐｒｏｆｉｔ") and a zero-width-character-split
+   word ("pro​fit") both bypass a naive regex. Fixed by normalizing with
+   Unicode NFKC and stripping zero-width characters BEFORE matching -- verified
+   live that both bypass attempts are now caught and that "learned"/
+   "unpredictable" still pass.
+
+**Concurrency**: `generate_or_fetch_ai_summary` locks the `strategy_runs` row
+(`SELECT ... FOR UPDATE`) before deciding whether to call the LLM.
+`test_ai_summary_service.py::test_concurrent_llm_requests_cause_exactly_one_call`
+is a real two-thread/two-connection test (not a mock of the lock) proving two
+simultaneous requests for the same run produce exactly one LLM call and exactly
+one `AiReport` row -- same proof pattern as Stage E's row-lock test.
+
+**Cross-test DB pollution, same root cause as a Stage E bug earlier this
+project**: the new concurrency test uses a real, non-rolled-back DB connection
+(needed so both threads see each other's writes), so its helper's
+`compliance_checks` insert had to carry demo-fixture-looking `notes` text --
+otherwise it permanently pollutes `db_test` with a non-demo row that later trips
+`test_demo_mode.py`'s "target already holds non-demo data" guard. Fixed the same
+way as last time: tag the row, then restart `db_test` (tmpfs wipe) to clear the
+state that had already leaked before the fix landed.
+
+**Frontend**: `AiSummaryPanel.tsx` (new), wired into `Dashboard.tsx` below the
+equity curve. Renders `report_text` as a plain React text child only -- no
+`dangerouslySetInnerHTML`, no markdown library. Added `jsdom` +
+`@testing-library/react` as dev dependencies (this frontend had no component
+-rendering tests before Stage G, only static-scan/pure-logic ones) specifically
+so the `<script>`-string safety claim could be a real render test, not just a
+grep: `AiSummaryPanel.test.tsx` renders the panel with a mocked report
+containing a literal `<script>alert("pwned")</script>` string and asserts zero
+`<script>` elements land in the DOM while the literal text is visible, plus a
+static scan (same idea as `wording.test.ts`) over the component source for
+`dangerouslySetInnerHTML`/`innerHTML`/markdown-library imports as a second,
+independent check. `npm audit` flags pre-existing vite/vitest dev-tooling
+vulnerabilities unrelated to this change (already noted below); the new test
+dependencies added none.
+
+**Verified live in the browser**, against `db_demo` (never production): started
+a demo backend pointed at a freshly `alembic upgrade head`-ed `db_demo`, opened
+an existing completed run's Dashboard, generated a template summary (heading
+read exactly "Plain-language summary of a simulated result (automatic, no
+AI)"), then requested LLM mode with no `AI_API_KEY` configured and confirmed it
+fell back to the template heading with the "AI generation was unavailable or
+failed" notice shown -- never labeled as AI output. Confirmed the disclosure
+text appears next to the mode selector exactly as specified, and that
+regenerating the same mode returns the existing stored row rather than
+double-counting `llm_attempts`.
+
+**Tests**: `test_ai_summary_guards.py` (14, pure, including the homoglyph and
+zero-width bypass cases and the two false-positive words), `test_ai_summary_
+input.py` (6, pure), `test_ai_summary_template.py` (3, pure, including the
+pinned-hash prompt-version-guard test), `test_ai_summary_llm.py` (6, mocks the
+Anthropic client only), `test_ai_summary_service.py` (11, DB-backed, including
+the real two-thread concurrency test), `test_ai_summary_route.py` (6, HTTP).
+Frontend: `AiSummaryPanel.test.tsx` (4: the script-injection render test, a
+not-run-yet state test, and 2 source static-scan tests). Full backend suite:
+332 passed, 1 skipped, 0 failed. Frontend: `npm run build` and `npm run test`
+both pass (18 tests).
 
 ## Open items / notes
 - **Stage C was never actually committed.** `git add` + the secret-scan checks were

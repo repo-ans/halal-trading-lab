@@ -4,9 +4,16 @@ Practise day trading with **virtual money** on a human-approved halal watchlist.
 Paper trading only. Not financial advice. Halal status comes from a third party, not
 from this app. See [CLAUDE.md](CLAUDE.md) for scope and decisions.
 
-Status: **Stage A + B + C + D done** (scaffold, schema, auth, backend data pipeline,
-instruments/bars API, chart UI, compliance gate + watchlist, 5/20 MA signal engine).
-See [docs/HANDOVER.md](docs/HANDOVER.md) for details.
+Status: **Stage A through G done** (scaffold, schema, auth, backend data pipeline,
+instruments/bars API, chart UI, compliance gate + watchlist, 5/20 MA signal engine,
+paper-trading engine, Strategy Lab / Virtual Trades / Dashboard, AI-generated run
+summaries). See [docs/HANDOVER.md](docs/HANDOVER.md) for details.
+
+**AI summary disclosure**: the Dashboard's AI summary panel offers two modes.
+*Template mode* (default) is automatic and sends nothing anywhere. *LLM mode*
+sends only the already-computed run metrics (trade count, P&L, fees, etc. --
+never raw price data) to an external AI provider to turn into prose; this is
+shown next to the mode selector itself, not just documented here.
 
 ## Prerequisites
 - Python 3.12, Node 20+, Docker (optional)
@@ -27,6 +34,10 @@ Copy `.env.example` to `.env` at the repo root, and the `VITE_*` values to
 | `TEST_DATABASE_URL` | backend tests | Local throwaway Postgres for DB-writing tests; defaults to `db_test` below, usually leave unset |
 | `ALLOW_DEV_DATA_SOURCE` | backend | Must be `true` for `YFinanceProvider` to run at all (dev-only, CLAUDE.md §3) |
 | `JOB_SECRET` | backend | Shared secret for `POST /jobs/backfill`'s `X-Job-Secret` header; empty disables the endpoint (503) |
+| `ADMIN_USER_IDS` | backend | Comma-separated Supabase user UUIDs allowed to write compliance records; empty/unset means no one is admin |
+| `AI_API_KEY` | backend | Anthropic API key for Stage G's LLM summary mode; empty disables LLM mode (template mode still works) |
+| `AI_MODEL` | backend | Model id for LLM summaries, default `claude-haiku-5-5` |
+| `AI_SUMMARY_DAILY_CAP` | backend | Per-user rolling-24h cap on LLM attempts, default 5 |
 | `VITE_SUPABASE_URL` | frontend | Same project URL |
 | `VITE_SUPABASE_ANON_KEY` | frontend | Public anon key |
 | `VITE_API_URL` | frontend | Backend base URL |
@@ -169,6 +180,17 @@ scheduler and the startup/`/jobs/backfill` collector are both disabled in demo m
 relative to "now" at the moment `seed_demo.py` runs, so "expires within 14 days"
 and "already expired" will eventually drift (e.g. `DEMO-SOON` will itself become
 expired after enough real days pass). Re-run `seed_demo.py` to refresh them.
+
+**After pulling a new migration**, `db_demo` needs it too -- it does NOT follow
+production automatically, since `seed_demo.py` only runs `alembic upgrade head`
+at seed time. Either run the migration directly against it:
+```powershell
+$env:DATABASE_URL = "postgresql+psycopg://postgres:postgres@127.0.0.1:5434/halal_demo"
+cd backend
+alembic upgrade head
+```
+or just re-run `seed_demo.py` (step 2 above), which does this as its first step
+anyway.
 
 **Resetting the demo database** (scoped -- never `docker compose down -v`, which
 would remove every volume in this compose file, not just this one):

@@ -108,9 +108,12 @@ def test_paper_run_happy_path_then_orders_and_fills(authed, owner_id):
     assert body["order_count"] == 2
     assert body["fill_count"] == 2
 
-    orders = client.get(f"/strategy-runs/{run['id']}/orders").json()
+    orders_page = client.get(f"/strategy-runs/{run['id']}/orders").json()
+    assert orders_page["total"] == 2
+    orders = orders_page["items"]
     assert [o["side"] for o in orders] == ["buy", "sell"]
     assert isinstance(orders[0]["qty"], str)  # Decimal-as-string, never a JSON float
+    assert orders[0]["rejection_message"] is None  # filled -- nothing to explain
 
     fills = client.get(f"/strategy-runs/{run['id']}/fills").json()
     assert len(fills) == 2
@@ -139,6 +142,9 @@ def test_unauthorized_caller_gets_404_on_every_route(db_conn, owner_id):
     assert client.post(f"/strategy-runs/{run['id']}/paper-run").status_code == 404
     assert client.get(f"/strategy-runs/{run['id']}/orders").status_code == 404
     assert client.get(f"/strategy-runs/{run['id']}/fills").status_code == 404
+    assert client.get(f"/strategy-runs/{run['id']}/metrics").status_code == 404
+    assert client.get(f"/strategy-runs/{run['id']}/orders.csv").status_code == 404
+    assert client.get(f"/strategy-runs/{run['id']}/fills.csv").status_code == 404
 
     # the owner can still reach all of them -- proves the 404s above are about
     # ownership, not a broken run

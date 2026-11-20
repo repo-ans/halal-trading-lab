@@ -20,6 +20,15 @@ export function formatBarDate(epochSeconds: number, timeZone: string): string {
   }).format(new Date(epochSeconds * 1000));
 }
 
+// Virtual Trades / Dashboard: an ISO-8601 timestamp (not epoch seconds, since
+// paper_orders/paper_fills come back that way) formatted with the SAME
+// date+time convention the instrument chart uses -- reusing formatBarDate/
+// formatBarTime rather than inventing a second format.
+export function formatIsoDateTime(iso: string, timeZone: string): string {
+  const epochSeconds = Math.floor(new Date(iso).getTime() / 1000);
+  return `${formatBarDate(epochSeconds, timeZone)} ${formatBarTime(epochSeconds, timeZone)}`;
+}
+
 // "Tue 17 Nov 2026" -- for the chart page title. en-GB ordering gives day-before-
 // month; the comma en-GB inserts after the weekday is stripped to match the exact
 // requested format.

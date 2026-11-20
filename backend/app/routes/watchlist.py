@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import AuthUser, current_user
@@ -29,6 +29,7 @@ class WatchlistRow(BaseModel):
     expires_at: str | None
     days_until_expiry: int | None
     latest_bar_ts: str | None
+    latest_close: str | None  # Decimal-as-string; Stage F's Strategy Lab price warning
     evidence_url: str | None  # already validated http(s)-only at write time
 
 
@@ -55,8 +56,9 @@ def get_watchlist(
             )
         )
         reason = effective_status(check, now)
-        latest_ts = session.scalar(
-            select(func.max(PriceBar.ts)).where(PriceBar.instrument_id == inst.id)
+        latest_bar = session.scalar(
+            select(PriceBar).where(PriceBar.instrument_id == inst.id)
+            .order_by(PriceBar.ts.desc()).limit(1)
         )
 
         rows.append(WatchlistRow(
@@ -68,7 +70,8 @@ def get_watchlist(
             last_checked_at=_iso(check.checked_at) if check is not None else None,
             expires_at=_iso(check.expires_at) if check is not None else None,
             days_until_expiry=(check.expires_at - now).days if check is not None else None,
-            latest_bar_ts=_iso(latest_ts),
+            latest_bar_ts=_iso(latest_bar.ts) if latest_bar is not None else None,
+            latest_close=str(latest_bar.close) if latest_bar is not None else None,
             evidence_url=check.evidence_url if check is not None else None,
         ))
     return rows

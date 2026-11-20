@@ -1,5 +1,18 @@
 import { API_URL } from "./supabase";
-import type { Bar, ComplianceStatus, CsvImportResult, Instrument, WatchlistRow } from "../types";
+import type {
+  AiSummary,
+  AiSummaryMode,
+  Bar,
+  ComplianceStatus,
+  CsvImportResult,
+  Instrument,
+  Metrics,
+  PaperOrdersPage,
+  PaperRunResult,
+  StrategyRun,
+  StrategyRunListResult,
+  WatchlistRow,
+} from "../types";
 
 async function _errorFor(res: Response): Promise<Error> {
   const detail = await res.json().catch(() => null);
@@ -128,4 +141,95 @@ export function postCsvDryRun(file: File, token: string): Promise<CsvImportResul
 
 export function postCsvConfirm(file: File, token: string): Promise<{ applied: number }> {
   return postFile<{ applied: number }>("/compliance/csv/confirm", file, token);
+}
+
+// --- Stage F: Strategy Lab, Virtual Trades, Dashboard ---
+
+export interface StrategyRunInput {
+  instrument_ids: number[];
+  range_start: string; // ISO-8601 with an explicit offset
+  range_end: string;
+  fast_period: number;
+  slow_period: number;
+  currency: string;
+  starting_cash: string;
+  max_position_value: string;
+  commission_per_order: string;
+  spread_bps: string;
+  slippage_bps: string;
+  reset_ma_each_session: boolean;
+}
+
+export function createStrategyRun(input: StrategyRunInput, token: string): Promise<StrategyRun> {
+  return postJson("/strategy-runs", input, token);
+}
+
+export function fetchStrategyRuns(
+  token: string,
+  opts: { limit?: number; offset?: number } = {},
+): Promise<StrategyRunListResult> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.offset) params.set("offset", String(opts.offset));
+  return apiFetch<StrategyRunListResult>(`/strategy-runs?${params}`, token);
+}
+
+export function fetchStrategyRun(runId: number, token: string): Promise<StrategyRun> {
+  return apiFetch<StrategyRun>(`/strategy-runs/${runId}`, token);
+}
+
+// {} body -- the route takes no input, but postJson always sends a JSON body.
+export function postPaperRun(runId: number, token: string): Promise<PaperRunResult> {
+  return postJson<PaperRunResult>(`/strategy-runs/${runId}/paper-run`, {}, token);
+}
+
+export function fetchMetrics(runId: number, token: string): Promise<Metrics> {
+  return apiFetch<Metrics>(`/strategy-runs/${runId}/metrics`, token);
+}
+
+export function fetchPaperOrders(
+  runId: number,
+  token: string,
+  opts: { limit?: number; offset?: number; instrumentId?: number; status?: string } = {},
+): Promise<PaperOrdersPage> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.offset) params.set("offset", String(opts.offset));
+  if (opts.instrumentId) params.set("instrument_id", String(opts.instrumentId));
+  if (opts.status) params.set("status", opts.status);
+  return apiFetch<PaperOrdersPage>(`/strategy-runs/${runId}/orders?${params}`, token);
+}
+
+export function postAiSummary(runId: number, mode: AiSummaryMode, token: string): Promise<AiSummary> {
+  return postJson<AiSummary>(`/strategy-runs/${runId}/ai-summary`, { mode }, token);
+}
+
+// null, not a throw, on 404 -- "no report generated yet for this mode" is an
+// expected, common state (handled as a plain empty-ish state by the caller),
+// not an error.
+export async function fetchAiSummary(
+  runId: number, mode: AiSummaryMode, token: string,
+): Promise<AiSummary | null> {
+  const res = await fetch(`${API_URL}/strategy-runs/${runId}/ai-summary?mode=${mode}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw await _errorFor(res);
+  return (await res.json()) as AiSummary;
+}
+
+// Authenticated file download: a plain <a href> can't carry a bearer token, so
+// this fetches with the header, then hands the browser a blob to save.
+export async function downloadCsv(path: string, token: string, filename: string): Promise<void> {
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw await _errorFor(res);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
