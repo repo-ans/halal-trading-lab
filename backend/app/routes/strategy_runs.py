@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.auth import AuthUser, current_user
 from app.db import get_session
 from app.models.instrument import Instrument
+from app.rate_limit import PAPER_RUN_LIMITER, STRATEGY_RUN_LIMITER
 from app.models.paper import PaperFill, PaperOrder
 from app.models.strategy import Signal, StrategyRun
 from app.services.ai_summary import HEADING_BY_MODE
@@ -131,6 +132,7 @@ def create_strategy_run(
     user: AuthUser = Depends(current_user),
     session: Session = Depends(get_session),
 ) -> StrategyRunOut:
+    STRATEGY_RUN_LIMITER.check(str(user.id), datetime.now(timezone.utc))
     if body.fast_period >= body.slow_period:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
                             "fast_period must be less than slow_period")
@@ -308,6 +310,7 @@ def paper_run(
 ) -> PaperRunOut:
     _get_owned_run(session, run_id, user)
     now = datetime.now(timezone.utc)
+    PAPER_RUN_LIMITER.check(str(user.id), now)
     try:
         run = run_paper_engine(session, run_id, now)
     except PaperStrategyRunNotFound:

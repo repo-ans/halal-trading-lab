@@ -39,4 +39,13 @@ describe("result screens avoid profit-claim wording", () => {
       expect(lower).toContain("simulated result");
     });
   }
+
+  it("Dashboard.tsx clarifies total fees are already included in realized P&L", () => {
+    // Stage H review finding: without this, a user could double-subtract fees
+    // (once by reading realized P&L, again by reading total fees as a separate
+    // deduction) -- total_fees is already netted into realized_pnl server-side
+    // (CLAUDE.md's Stage F metrics note), the UI just needs to say so.
+    const dashboard = sources["./Dashboard.tsx"];
+    expect(dashboard.toLowerCase()).toContain("already included in realized p&l");
+  });
 });

@@ -88,7 +88,8 @@ export default function Dashboard({ session, runId, onSelectRun }: DashboardProp
             <Metric label="Win rate" value={pct(metrics.data.win_rate)} />
             <Metric label="Avg win" value={money(metrics.data.avg_win)} />
             <Metric label="Avg non-win" value={money(metrics.data.avg_non_win)} />
-            <Metric label="Total fees" value={`$${metrics.data.total_fees}`} />
+            <Metric label="Total fees" value={`$${metrics.data.total_fees}`}
+                   caption="already included in realized P&L" />
             <Metric label="Max drawdown" value={`${(Number(metrics.data.max_drawdown) * 100).toFixed(2)}%`} />
           </div>
 
@@ -111,11 +112,12 @@ export default function Dashboard({ session, runId, onSelectRun }: DashboardProp
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, caption }: { label: string; value: string; caption?: string }) {
   return (
     <div style={{ border: "1px solid #ddd", borderRadius: 6, padding: 12 }}>
       <div style={{ fontSize: 12, color: "#666" }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 600 }}>{value}</div>
+      {caption && <div style={{ fontSize: 11, color: "#888" }}>{caption}</div>}
     </div>
   );
 }

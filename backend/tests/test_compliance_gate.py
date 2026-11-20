@@ -102,6 +102,14 @@ def test_none_evidence_url_is_valid_on_its_own():
     assert validate_evidence_url(None) is None
 
 
+def test_scheme_only_no_host_rejected():
+    assert validate_evidence_url("https:") is not None
+
+
+def test_empty_authority_no_host_rejected():
+    assert validate_evidence_url("http:///") is not None
+
+
 # --- validate_new_check ---
 
 def test_halal_requires_evidence():

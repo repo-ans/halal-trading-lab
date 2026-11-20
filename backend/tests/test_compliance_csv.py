@@ -167,6 +167,21 @@ def test_bad_evidence_scheme_rejected_per_row(db_conn):
     assert not result.rows[0].accepted
 
 
+@run_db_tests
+def test_evidence_url_with_no_host_rejected_per_row(db_conn):
+    """Stage H review finding: a scheme with no host ("https:") must be rejected
+    by the CSV importer too -- validate_new_check is shared with the route, so
+    this and test_create_rejects_evidence_url_with_no_host (test_compliance_route.py)
+    prove the two paths can't silently diverge."""
+    _make_instrument(db_conn)
+    db_conn.commit()
+    raw = _csv("ZCSV,XNAS,halal,manual,https:,2026-11-01,,")
+
+    result = parse_and_validate_csv(raw, db_conn, NOW, 90)
+
+    assert not result.rows[0].accepted
+
+
 # --- dry-run never writes; confirm is all-or-nothing (full atomicity is tested at
 # the route level in test_compliance_route.py, with a real HTTP confirm call) ---
 

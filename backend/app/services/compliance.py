@@ -77,14 +77,21 @@ def assert_tradable(session: Session, instrument_id: int, now: datetime) -> int:
 
 def validate_evidence_url(url: str | None) -> str | None:
     """http/https only -- never javascript:, data:, etc. (an XSS vector once
-    rendered as a clickable link in the frontend). Returns an error message, or
-    None if valid (including url is None, which is valid on its own -- the
-    'halal requires evidence' rule is checked separately)."""
+    rendered as a clickable link in the frontend). Also requires a non-empty host
+    (Stage H review finding: "https:" and "http:///" both pass a scheme-only check
+    but have no host at all -- not a usable piece of evidence, and the kind of
+    malformed value that could otherwise sit in the DB until someone notices the
+    link goes nowhere). Returns an error message, or None if valid (including url
+    is None, which is valid on its own -- the 'halal requires evidence' rule is
+    checked separately)."""
     if url is None:
         return None
-    scheme = urlsplit(url).scheme.lower()
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
     if scheme not in ("http", "https"):
         return f"evidence_url must be http or https, got {scheme!r}"
+    if not parts.netloc:
+        return "evidence_url must include a host"
     return None
 
 

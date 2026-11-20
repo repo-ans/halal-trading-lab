@@ -99,6 +99,15 @@ Consequences for this project:
    (`backend/app/providers/price/yfinance_provider.py`, Stage B1) tags every row it
    writes this way specifically so this cleanup is a single `WHERE source='yfinance'`
    away, not an audit.
+5. **Stage H licence guard, done 2026-11-20 (interim, not a replacement for the
+   purge above):** `GET /instruments/{id}/bars` (`app/routes/instruments.py`) refuses
+   with 503 if any returned row has `source='yfinance'` and the caller isn't in
+   `OWNER_USER_IDS` (`app/auth.py::is_owner`, fail-closed -- empty/unset means NO ONE,
+   not even the real owner, see it). This is NOT the Supabase Admin API-based
+   "how many real users exist" guard originally sketched for this item -- deliberately
+   simpler and keeps no service-role key in the backend at all. It buys time to run a
+   pilot with more than one allowed user before the provider switch lands; it does not
+   replace deleting the yfinance rows once a licensed provider is in place.
 
 ---
 
@@ -711,7 +720,7 @@ interpolate, or fall back to the last known price to keep a run alive.
 | E | Paper engine: cash ledger, positions, fills, EOD exit, costs | Done 2026-11-19 (sizing, fills, EOD exit + freeze, cash ledger, ownership checks retrofitted onto Stage D too) |
 | F | Dashboard: watchlist, results, trade history, CSV export | Done 2026-11-19 (Strategy Lab, Virtual Trades, Dashboard, realized equity curve, CSV export, no new migration) |
 | G | AI review — plain-language summaries from computed metrics only | Done 2026-11-20 (number-safety placeholder substitution, phrase guard, cost cap with row-lock + daily cap, SecretStr key, plain-text-only rendering, migration 0006 on db_test and production) |
-| H | Automated tests, security checks, demo data, licence check | Demo data done 2026-11-18 (ahead of schedule, built between D and E so E-G can be demoed in isolation — see §5's "Demo environment fixtures" and the README); tests/security/licence check not started |
+| H | Automated tests, security checks, demo data, licence check | Demo data done 2026-11-18 (ahead of schedule). Security hardening done 2026-11-20: user allowlist, interim yfinance licence guard, JWT issuer validation + security test suite, per-user rate limiting, error-response safety test, gitleaks/pip-audit/npm audit run, read-only production structural checks, `docs/RELEASE_CHECKLIST.md` written. **Still open:** commit/push (blocks clean-clone test + independent review), licensed provider + yfinance purge, GitHub Actions cron, backup role + restore drill not yet executed against production — see `docs/RELEASE_CHECKLIST.md` |
 
 Target milestones: wk 1 requirements + provider decision · wk 2 watchlist +
 compliance · wk 3–4 backtest engine, ledger, dashboard · wk 5 testing + AI
@@ -765,6 +774,27 @@ summaries · wk 6 owner pilot (virtual funds only).
   mode sends the numbers above to an external service. Template mode sends
   nothing."* Keep this in sync with `frontend/src/components/AiSummaryPanel.tsx`
   and README.md if the wording changes.
+- **Stage H: `ALLOWED_USER_IDS` and `OWNER_USER_IDS` (`app/config.py`) are
+  fail-closed, same shape as `ADMIN_USER_IDS`** -- empty/unset means NO ONE,
+  never "everyone"/"no restriction". `app/auth.py::current_user` enforces
+  `ALLOWED_USER_IDS` (admins count as allowed automatically) for every
+  authenticated route; `is_owner` gates yfinance-sourced bars separately (see
+  §3 point 5) -- being allowed to use the app implies nothing about being
+  licensed to see yfinance prices, and vice versa. Disabling public sign-ups in
+  the Supabase dashboard (README) is still required -- `ALLOWED_USER_IDS` alone
+  only stops an unauthorized user from calling the API, not from obtaining a
+  valid JWT in the first place.
+- **Stage H: JWT verification now validates `iss`, not just `aud`/`exp`/the
+  signature.** `app/auth.py::_expected_issuer` derives the expected value from
+  `SUPABASE_URL` (`"<url>/auth/v1"`); skipped only if `SUPABASE_URL` itself is
+  unset. `alg=none` and a tampered signature were already rejected by PyJWT's
+  own `algorithms=` allowlist and signature check -- Stage H added tests
+  proving it (`backend/tests/test_jwt_security.py`), not new code for those two.
+- **Stage H: rate limiting (`app/rate_limit.py`) is single-instance only** --
+  in-process memory, no Redis. Running more than one backend instance would
+  give each instance its own independent counter (see README's "Stage H: rate
+  limiting is single-instance only" for the full explanation). Fine today
+  (Render free tier, one container); revisit if that changes.
 - **Never run a command that expands environment variables or `.env` contents into
   its output** — `docker compose config`, `env`, `printenv`, `cat .env` (or any
   editor/pager on it), `set` with no args, and the like. `docker compose config`

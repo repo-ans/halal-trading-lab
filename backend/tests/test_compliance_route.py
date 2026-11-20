@@ -120,6 +120,21 @@ def test_admin_can_create(admin):
 
 
 @run_db_tests
+def test_create_rejects_evidence_url_with_no_host(admin):
+    """Stage H review finding: a scheme with no host ("https:", "http:///") must
+    be rejected by the route, same as any other malformed evidence_url."""
+    inst = _make_instrument(admin)
+    admin.commit()
+
+    resp = client.post("/compliance", json={
+        "instrument_id": inst.id, "status": "halal", "source": "manual",
+        "evidence_url": "https:", "checked_at": PAST_CHECKED_AT,
+    })
+
+    assert resp.status_code == 422
+
+
+@run_db_tests
 def test_any_authenticated_user_can_read_watchlist(non_admin):
     _make_instrument(non_admin)
     non_admin.commit()

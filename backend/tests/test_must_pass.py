@@ -1,6 +1,5 @@
-"""CLAUDE.md section 9 must-pass tests, as strict-xfail placeholders.
-When the real implementation lands, replace the body and REMOVE the xfail marker.
-strict=True means an accidentally-passing placeholder fails the suite."""
+"""CLAUDE.md section 9 must-pass tests -- all 8 are real implementations now,
+not xfail placeholders."""
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
@@ -23,11 +22,6 @@ _PAPER_KWARGS = dict(
     commission_per_order=Decimal("1.00"), spread_bps=Decimal("2"), slippage_bps=Decimal("1"),
     max_position_value=Decimal("200"), starting_cash=Decimal("1000"),
 )
-
-
-def placeholder(stage: str):
-    return pytest.mark.xfail(strict=True, reason=f"not implemented until Stage {stage}",
-                             raises=NotImplementedError)
 
 
 def test_1_math_and_loss_calculations_are_correct():

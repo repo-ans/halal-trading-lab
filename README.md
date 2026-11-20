@@ -16,12 +16,17 @@ never raw price data) to an external AI provider to turn into prose; this is
 shown next to the mode selector itself, not just documented here.
 
 ## Prerequisites
-- Python 3.12, Node 20+, Docker (optional)
+- Python 3.12 (also developed and tested on 3.14 this far; `pyproject.toml` only
+  requires `>=3.12`, so either works), Node 20+, Docker (optional)
 - A Supabase project (provides Postgres and Auth)
 
 ## Environment variables
-Copy `.env.example` to `.env` at the repo root, and the `VITE_*` values to
-`frontend/.env.local`. Never commit real keys.
+Copy `.env.example` to **both** `.env` at the repo root (`docker-compose.yml` needs
+this to exist even for `db_test`-only commands, which otherwise don't touch any
+secret) **and** `backend/.env` (every backend command is run from inside
+`backend/`, and `app/config.py` reads `.env` relative to the current directory --
+the repo-root copy alone is not enough once you `cd backend`). Also copy the
+`VITE_*` values to `frontend/.env.local`. Never commit real keys.
 
 | Variable | Used by | Purpose |
 |---|---|---|
@@ -31,10 +36,12 @@ Copy `.env.example` to `.env` at the repo root, and the `VITE_*` values to
 | `CORS_ORIGINS` | backend | Allowed browser origins, comma-separated |
 | `APP_ENV` | backend | `development` / `production` |
 | `APP_MODE` | backend | `production` (default) / `demo` -- see "Demo environment" below |
-| `TEST_DATABASE_URL` | backend tests | Local throwaway Postgres for DB-writing tests; defaults to `db_test` below, usually leave unset |
+| `TEST_DATABASE_URL` | backend tests | Local throwaway Postgres for DB-writing tests; leaving it blank (as `.env.example` ships it) or omitting it entirely both correctly fall back to `db_test` below -- `app/config.py` treats an empty value the same as unset |
 | `ALLOW_DEV_DATA_SOURCE` | backend | Must be `true` for `YFinanceProvider` to run at all (dev-only, CLAUDE.md §3) |
 | `JOB_SECRET` | backend | Shared secret for `POST /jobs/backfill`'s `X-Job-Secret` header; empty disables the endpoint (503) |
 | `ADMIN_USER_IDS` | backend | Comma-separated Supabase user UUIDs allowed to write compliance records; empty/unset means no one is admin |
+| `ALLOWED_USER_IDS` | backend | Stage H. Comma-separated Supabase user UUIDs allowed to use the app at all; empty/unset means no one is allowed. `ADMIN_USER_IDS` members count as allowed automatically |
+| `OWNER_USER_IDS` | backend | Stage H licence guard. Comma-separated Supabase user UUIDs allowed to see yfinance-sourced price data; empty/unset means no one, not even the real owner, can see it (fail closed) |
 | `AI_API_KEY` | backend | Anthropic API key for Stage G's LLM summary mode; empty disables LLM mode (template mode still works) |
 | `AI_MODEL` | backend | Model id for LLM summaries, default `claude-haiku-5-5` |
 | `AI_SUMMARY_DAILY_CAP` | backend | Per-user rolling-24h cap on LLM attempts, default 5 |
@@ -44,6 +51,22 @@ Copy `.env.example` to `.env` at the repo root, and the `VITE_*` values to
 
 Create the owner login in the Supabase dashboard (Authentication > Users). The app has
 no sign-up screen.
+
+**Stage H: disable public sign-ups too.** `ALLOWED_USER_IDS`/`ADMIN_USER_IDS` stop an
+unauthorized Supabase user from using the app's API, but a stranger could still create
+a Supabase Auth account in the first place if sign-ups are left on. In the Supabase
+dashboard, go to Authentication > Providers (or Authentication > Settings, depending on
+project version) and disable email/sign-up for new users -- the owner account is
+created directly in the dashboard (above), not through a sign-up flow, so this never
+blocks the owner.
+
+**Stage H: rate limiting is single-instance only.** `POST /strategy-runs` and
+`POST /strategy-runs/{id}/paper-run` are rate-limited per user (`app/rate_limit.py`),
+but the limiter's state lives in the backend process' own memory, not a shared store
+like Redis. Running more than one backend instance behind a load balancer gives each
+instance its own independent counter, so the effective limit becomes
+`max_requests * instance_count`, not a shared cap. Fine for this app's current
+single-instance deployment (Render free tier, one container); revisit if that changes.
 
 ## Run the backend
 With Docker (backend container only; the database is Supabase):
@@ -76,13 +99,19 @@ npm run dev
 ```
 http://localhost:5173
 
+**Stage H: never pass `--host` to `npm run dev`.** The dev server binds to localhost
+only by default, which is the mitigation for `npm audit`'s esbuild finding ("esbuild
+enables any website to send any requests to the development server and read the
+response") -- adding `--host` to expose it on the LAN would remove that protection.
+See `docs/RELEASE_CHECKLIST.md` for the full dependency scan results.
+
 ## Tests
 ```
 cd backend
 pytest
 ```
-The must-pass tests not yet implemented are strict-xfail placeholders until their
-stage lands; they show as `xfailed`. Everything else must pass.
+All 8 of CLAUDE.md section 9's must-pass tests are real implementations (no `xfail`
+placeholders remain, as of Stage H) -- everything in the suite must pass.
 
 DB-writing tests (idempotency, rollback regression, etc.) are skipped unless
 `RUN_DB_TESTS=1`, and run against a throwaway **local** Postgres, never the production

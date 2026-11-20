@@ -22,7 +22,7 @@ from app.models.strategy import Signal, StrategyRun
 from app.services.compliance import create_compliance_check
 from app.services.strategy_run import run_strategy
 import app.services.paper_engine as paper_engine
-from app.services.paper_engine import PaperEngineAlreadyRun, run_paper_engine
+from app.services.paper_engine import EngineCurrencyMismatch, PaperEngineAlreadyRun, run_paper_engine
 from tests.conftest import run_db_tests
 
 CAL = "NYSE"
@@ -137,10 +137,16 @@ def test_already_run_guard_also_applies_to_zero_orders(db_conn):
 def test_currency_mismatch_regression_guard(db_conn):
     """Unreachable through the normal flow (Stage D's run_strategy already
     refuses a mixed-currency run before any signal exists) -- this proves the
-    defensive assertion inside run_paper_engine itself is real, by flipping an
+    defensive check inside run_paper_engine itself is real, by flipping an
     already-loaded Instrument's currency in memory (SQLAlchemy's identity map
     means run_paper_engine's own session.get() returns this same mutated
-    object) rather than constructing an impossible end-to-end scenario."""
+    object) rather than constructing an impossible end-to-end scenario.
+
+    Stage H review finding: this used to be a plain `assert`, which `python -O`
+    strips out entirely -- silently letting a currency-mismatched run through
+    in an optimized deployment instead of failing it. Now an explicit raise, so
+    this asserts the real exception type and its fields, not just "something
+    raised"."""
     inst = _instrument(db_conn)
     _insert_bars(db_conn, inst.id, [10, 10, 10, 10, 20, 30])
     now = datetime(2026, 12, 14, 12, 0, tzinfo=timezone.utc)
@@ -149,8 +155,12 @@ def test_currency_mismatch_regression_guard(db_conn):
     run = _completed_run(db_conn, inst.id, [10, 10, 10, 10, 20, 30], now)
 
     inst.currency = "EUR"  # in-memory only, never flushed
-    with pytest.raises(AssertionError):
+    with pytest.raises(EngineCurrencyMismatch) as exc:
         run_paper_engine(db_conn, run.id, now)
+    assert exc.value.run_id == run.id
+    assert exc.value.instrument_id == inst.id
+    assert exc.value.instrument_currency == "EUR"
+    assert exc.value.run_currency == "USD"
 
 
 @run_db_tests

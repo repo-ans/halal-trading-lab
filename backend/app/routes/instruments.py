@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.auth import AuthUser, current_user
+from app.auth import AuthUser, current_user, is_owner
 from app.db import get_session
 from app.market_calendar import EXCHANGE_CALENDARS, exchange_timezone
 from app.models.instrument import Instrument
@@ -119,6 +119,20 @@ def get_bars(
             PriceBar.ts < end,
         ).order_by(PriceBar.ts)
     ).all()
+
+    # CLAUDE.md section 3: yfinance is development-only, not licensed for use by
+    # anyone but the owner. Refuse loudly (503) rather than silently filtering --
+    # a partial chart with gaps would be worse than no chart, and this is exactly
+    # the kind of "invent/omit data" CLAUDE.md's must-pass test 6 already forbids
+    # for provider failures; an unlicensed-data situation gets the same treatment.
+    if any(r.source == "yfinance" for r in rows) and not is_owner(user):
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "This instrument's price data currently comes from a development-only "
+            "source (yfinance) that is not licensed for display to anyone but the "
+            "app owner. It will become available once a commercially licensed "
+            "provider is in place.",
+        )
 
     return [
         BarOut(ts=int(r.ts.timestamp()), open=str(r.open), high=str(r.high),

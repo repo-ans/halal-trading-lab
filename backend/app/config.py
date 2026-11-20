@@ -1,8 +1,10 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEFAULT_TEST_DATABASE_URL = "postgresql+psycopg://postgres:postgres@127.0.0.1:5433/halal_test"
 
 
 class Settings(BaseSettings):
@@ -23,7 +25,7 @@ class Settings(BaseSettings):
     # loopback first -- nothing is listening there, so every connection stalls on
     # that attempt before falling back to IPv4 (discovered 2026-11-19: a single
     # migration command took over two minutes instead of instant).
-    test_database_url: str = "postgresql+psycopg://postgres:postgres@127.0.0.1:5433/halal_test"
+    test_database_url: str = _DEFAULT_TEST_DATABASE_URL
     supabase_url: str = ""
     supabase_jwt_secret: str = ""
     cors_origins: str = "http://localhost:5173"
@@ -39,6 +41,19 @@ class Settings(BaseSettings):
     # Comma-separated Supabase auth user UUIDs. Empty/unset means NO ONE is an admin
     # (fail closed) -- never treat an unset list as "everyone" or "no restriction".
     admin_user_ids: str = ""
+    # Stage H. Comma-separated Supabase auth user UUIDs allowed to use the app at
+    # all. Empty/unset means NO ONE is allowed (fail closed) -- every authenticated
+    # route's current_user() rejects a valid-but-not-allowlisted JWT with 403.
+    # ADMIN_USER_IDS members count as allowed automatically (app/auth.py::is_allowed).
+    # This is the app-level gate; disable public sign-ups in the Supabase dashboard
+    # too (README) so a stranger can't even obtain a valid JWT in the first place.
+    allowed_user_ids: str = ""
+    # Stage H licence guard (CLAUDE.md section 3): yfinance-sourced price_bars rows
+    # may only be returned to users in this set. Empty/unset means NO ONE is the
+    # owner (fail closed) -- everyone, owner included, gets 503 until this is set.
+    # Separate from ADMIN_USER_IDS on purpose: an admin can write compliance data
+    # without being licensed to see yfinance-sourced prices, and vice versa.
+    owner_user_ids: str = ""
     # UNCONFIRMED ASSUMPTION (CLAUDE.md section 5): 90 days, owner has not confirmed.
     compliance_default_validity_days: int = 90
 
@@ -58,6 +73,19 @@ class Settings(BaseSettings):
     # per rolling 24h -- see app/services/ai_summary.py.
     ai_summary_daily_cap: int = 5
 
+    @field_validator("test_database_url", mode="before")
+    @classmethod
+    def _empty_means_use_the_default(cls, v: str) -> str:
+        # Clean-clone-test finding (Stage H): .env.example ships TEST_DATABASE_URL
+        # blank ("usually leave unset"), but `cp .env.example .env` turns that into
+        # an env var explicitly SET to "" -- which pydantic-settings treats as a
+        # real value, not as "absent", so it silently overrides this field's
+        # non-empty default instead of falling back to it. Without this, a new
+        # developer who copies .env.example exactly as README instructs gets
+        # "RUN_DB_TESTS=1 but TEST_DATABASE_URL is not set" the first time they
+        # try to run the DB-writing tests, even though they changed nothing.
+        return v if v else _DEFAULT_TEST_DATABASE_URL
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
@@ -65,6 +93,14 @@ class Settings(BaseSettings):
     @property
     def admin_user_id_set(self) -> set[str]:
         return {u.strip().lower() for u in self.admin_user_ids.split(",") if u.strip()}
+
+    @property
+    def allowed_user_id_set(self) -> set[str]:
+        return {u.strip().lower() for u in self.allowed_user_ids.split(",") if u.strip()}
+
+    @property
+    def owner_user_id_set(self) -> set[str]:
+        return {u.strip().lower() for u in self.owner_user_ids.split(",") if u.strip()}
 
 
 @lru_cache

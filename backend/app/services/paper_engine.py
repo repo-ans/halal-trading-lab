@@ -59,6 +59,20 @@ class PaperEngineAlreadyRun(Exception):
         self.run_id = run_id
 
 
+class EngineCurrencyMismatch(Exception):
+    """Defense-in-depth invariant: Stage D's run_strategy already refuses a whole
+    mixed-currency run before any signal exists (must-pass test 8), so this
+    should be unreachable in practice. Raised explicitly, not asserted -- `assert`
+    is stripped entirely under `python -O`, which would silently discard this
+    check rather than fail loudly."""
+    def __init__(self, run_id: int, instrument_id: int, instrument_currency: str,
+                run_currency: str):
+        self.run_id = run_id
+        self.instrument_id = instrument_id
+        self.instrument_currency = instrument_currency
+        self.run_currency = run_currency
+
+
 @dataclass(frozen=True)
 class SignalIn:
     signal_id: int
@@ -303,9 +317,9 @@ def run_paper_engine(session: Session, strategy_run_id: int, now: datetime) -> S
 
     compliant_ids = [int(i) for i in run.compliance_check_ids]
     instruments_by_id = {i: session.get(Instrument, i) for i in compliant_ids}
-    assert all(inst.currency == run.currency for inst in instruments_by_id.values()), (
-        "a non-matching-currency instrument reached the paper engine -- Stage D's "
-        "run_strategy should have refused the whole run before this was possible")
+    for i, inst in instruments_by_id.items():
+        if inst.currency != run.currency:
+            raise EngineCurrencyMismatch(run.id, i, inst.currency, run.currency)
     calendars_by_instrument = {i: _calendar_for(instruments_by_id[i]) for i in compliant_ids}
 
     signals = session.scalars(
