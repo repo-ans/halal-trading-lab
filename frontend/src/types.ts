@@ -39,6 +39,9 @@ export interface WatchlistRow {
   days_until_expiry: number | null;
   latest_bar_ts: string | null;
   latest_close: string | null; // Stage F: Strategy Lab's price-vs-cap warning
+  // Stage H: true means the price exists but is withheld (yfinance-sourced,
+  // caller isn't the licensed owner) -- never confuse this with "no data".
+  latest_close_restricted: boolean;
   evidence_url: string | null;
 }
 

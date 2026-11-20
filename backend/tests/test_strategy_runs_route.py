@@ -57,12 +57,12 @@ def _instrument(session, symbol="ZROUTESTRAT", currency="USD") -> Instrument:
     return inst
 
 
-def _insert_bars(session, instrument_id: int, closes: list[int]) -> list[datetime]:
+def _insert_bars(session, instrument_id: int, closes: list[int], source="manual") -> list[datetime]:
     opens = session_bar_opens(DAY, CAL)[:len(closes)]
     session.add_all([
         PriceBar(instrument_id=instrument_id, ts=t, interval=SUPPORTED_INTERVAL,
                  open=Decimal(c), high=Decimal(c), low=Decimal(c), close=Decimal(c),
-                 volume=100, source="manual")
+                 volume=100, source=source)
         for t, c in zip(opens, closes)
     ])
     session.flush()
@@ -152,6 +152,54 @@ def test_partially_blocked_run_still_completes_for_the_compliant_instrument(auth
     assert body["status"] == "completed"
     assert body["blocked_instruments"] == {str(blocked.id): "no_record"}
     assert body["compliance_check_ids"] == {str(compliant.id): check_id}
+
+
+@run_db_tests
+def test_non_owner_blocked_from_yfinance_instrument_via_the_route(authed, monkeypatch):
+    """Stage H review finding: proves the route actually wires is_owner(user)
+    into run_strategy's caller_is_owner, end to end -- not just the service
+    function in isolation. `authed`'s user is never in owner_user_ids by
+    default (it's empty, fail-closed), so no extra setup is needed here."""
+    inst = _instrument(authed)
+    _insert_bars(authed, inst.id, [10, 10, 10, 10, 20, 30], source="yfinance")
+    _make_compliant(authed, inst.id)
+    authed.commit()
+    opens = session_bar_opens(DAY, CAL)
+
+    resp = client.post("/strategy-runs", json=_body(
+        [inst.id], opens[0], opens[5] + timedelta(minutes=5)))
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["blocked_instruments"] == {str(inst.id): "licence_restricted"}
+
+
+@pytest.fixture
+def authed_as_owner(db_conn, monkeypatch):
+    from app.config import get_settings
+
+    def _fake_session():
+        yield db_conn
+
+    user_id = uuid4()
+    monkeypatch.setattr(get_settings(), "owner_user_ids", str(user_id))
+    app.dependency_overrides[current_user] = lambda: AuthUser(id=user_id, email="o@example.com")
+    app.dependency_overrides[get_session] = _fake_session
+    return db_conn
+
+
+@run_db_tests
+def test_owner_not_blocked_from_yfinance_instrument_via_the_route(authed_as_owner):
+    inst = _instrument(authed_as_owner)
+    _insert_bars(authed_as_owner, inst.id, [10, 10, 10, 10, 20, 30, 5, 5, 5, 5], source="yfinance")
+    _make_compliant(authed_as_owner, inst.id)
+    authed_as_owner.commit()
+    opens = session_bar_opens(DAY, CAL)
+
+    resp = client.post("/strategy-runs", json=_body(
+        [inst.id], opens[0], opens[9] + timedelta(minutes=5)))
+
+    assert resp.status_code == 201
+    assert resp.json()["blocked_instruments"] == {}
 
 
 @run_db_tests

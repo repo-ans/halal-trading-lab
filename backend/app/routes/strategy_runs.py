@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.auth import AuthUser, current_user
+from app.auth import AuthUser, current_user, is_owner
 from app.db import get_session
 from app.models.instrument import Instrument
 from app.rate_limit import PAPER_RUN_LIMITER, STRATEGY_RUN_LIMITER
@@ -151,7 +151,7 @@ def create_strategy_run(
             starting_cash=body.starting_cash, max_position_value=body.max_position_value,
             commission_per_order=body.commission_per_order, spread_bps=body.spread_bps,
             slippage_bps=body.slippage_bps, reset_ma_each_session=body.reset_ma_each_session,
-            now=now,
+            now=now, caller_is_owner=is_owner(user),
         )
     except UnknownInstrument as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND,

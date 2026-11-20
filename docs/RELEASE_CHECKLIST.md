@@ -2,7 +2,23 @@
 
 Read `CLAUDE.md` first. This file is the living record of hardening/release
 -readiness work (CLAUDE.md section 9's must-pass tests, section 10's Stage H row).
-Last updated: 20 Nov 2026, after Stage H's security-hardening pass.
+Last updated: 20 Nov 2026, after Stage H's security-hardening pass, a clean-clone
+test, an independent review, and the fixes that review's findings required.
+
+## 0. Independent review (20 Nov 2026)
+
+A fresh agent with no context from this build reviewed the committed Stage H
+code directly (not this document's claims about it). Confirmed-safe: the
+allowlist covers every authenticated route with no bypass, the fail-closed
+`_user_id_set` properties really do produce an empty set from an empty string
+(not `{""}`), the JWT `require`/`issuer` checks are genuinely shared by both
+verification branches, `EngineCurrencyMismatch` is a real raise that survives
+`python -O`, `validate_evidence_url`'s host check reaches both the route and the
+CSV importer, and the rate limiter has no bypass path. **Found one real gap**:
+the licence guard only covered `GET /instruments/{id}/bars` -- `GET /watchlist`
+and the entire `/strategy-runs/*` surface leaked the same yfinance-derived data
+to any allowlisted non-owner user. Fixed the same day; see section 1's licence
+-guard entry below for the full writeup.
 
 ---
 
@@ -26,22 +42,40 @@ Last updated: 20 Nov 2026, after Stage H's security-hardening pass.
   allowed -> 200, admin-not-in-allowlist -> 200 (admin counts as allowed), and the
   fail-closed empty-everything case.
 
-### Licence guard (new, 20 Nov 2026 -- interim, CLAUDE.md section 3 point 5)
-- `OWNER_USER_IDS` (env, comma-separated UUIDs, fail-closed). `GET
-  /instruments/{id}/bars` returns **503** instead of the requested bars if any row
-  has `source='yfinance'` and the caller isn't in `OWNER_USER_IDS` -- never a
-  partial/filtered response (CLAUDE.md's "never invent or silently omit data"
-  principle, same reasoning as must-pass test 6).
+### Licence guard (new, 20 Nov 2026 -- interim, CLAUDE.md section 3 point 5;
+### corrected same day after an independent review found it incomplete)
+- `OWNER_USER_IDS` (env, comma-separated UUIDs, fail-closed). First version only
+  gated `GET /instruments/{id}/bars` (**503** instead of the requested bars if
+  any row has `source='yfinance'` and the caller isn't in `OWNER_USER_IDS` --
+  never a partial/filtered response, CLAUDE.md's "never invent or silently omit
+  data" principle, same reasoning as must-pass test 6).
+- **An independent review caught a real gap the same day**: that was the ONLY
+  route gated. `GET /watchlist`'s `latest_close` and the entire `/strategy-runs/*`
+  surface (any allowlisted user could backtest a yfinance-sourced instrument and
+  reconstruct most of its price series from the signals/fills/metrics/CSV) leaked
+  the same data with zero check. Both fixed same day:
+  - `GET /watchlist`: `latest_close` null + new `latest_close_restricted: true`
+    for a yfinance-sourced instrument shown to a non-owner (a bare null would be
+    indistinguishable from "no data", its own silent omission).
+  - `POST /strategy-runs`: `run_strategy`'s new `caller_is_owner` parameter
+    (**default `False`, fail-closed**) blocks a yfinance-sourced instrument for
+    a non-owner with reason `"licence_restricted"` in the same `blocked_instruments`
+    dict the compliance gate already populates -- the instrument never enters
+    the run, so nothing downstream has to separately remember to check.
+    `replay_strategy_run` needed no change: it already copies `blocked_instruments`
+    verbatim instead of re-gating.
 - Deliberately NOT the Supabase Admin API-based design sketched in the Stage H
   plan ("how many real Supabase users exist") -- that would need a service-role
   key in the backend. This is simpler and keeps that key out entirely. It is an
   interim measure, not a substitute for the real fix: deleting every
   `source='yfinance'` row once a licensed provider is backfilled (see section 2).
-- Tests: `backend/tests/test_licence_guard.py` (5 tests) -- owner sees yfinance
-  bars, allowed non-owner gets 503, non-yfinance-sourced bars are never blocked,
-  a mix of sources in one response still blocks, and the fail-closed empty-
-  `OWNER_USER_IDS` case blocks everyone including who would eventually be the
-  real owner.
+- Tests: `backend/tests/test_licence_guard.py` (5, the bars route),
+  `backend/tests/test_watchlist_route.py` (4 new: non-owner restricted, owner
+  sees it, non-yfinance never restricted, "no data" vs. "restricted" are
+  distinguishable), `backend/tests/test_strategy_run_service.py` (3 new: blocked,
+  owner not blocked, default-is-not-owner), `backend/tests/test_strategy_runs_route.py`
+  (2 new: same two cases through the real route, proving `is_owner(user)` is
+  actually wired through end to end).
 
 ### JWT verification
 - Found already correct before Stage H: expiry, audience, and algorithm are
@@ -98,8 +132,10 @@ Last updated: 20 Nov 2026, after Stage H's security-hardening pass.
   became real implementations across Stages C-E.
 
 ### Full suite
-355 passed, 1 skipped (opt-in live RLS check), 0 failed, against a freshly
-migrated `db_test` (revision 0006, no new migration this stage).
+379 passed, 1 skipped (opt-in live RLS check), 0 failed, against a freshly
+migrated `db_test` (revision 0006, no new migration this stage) -- includes
+the 4 review-finding fixes, the clean-clone-test's `test_config.py`, and the
+licence-guard-extension tests from the independent review's finding.
 
 ---
 
@@ -269,16 +305,15 @@ of what the free tier currently includes.
 
 ## 7. What blocks a public (non-owner) launch, in priority order
 
-1. **Not committed to git.** Every Stage C-H file is still unstaged/untracked.
-   A clean-clone test and an independent review are both impossible until this
-   is resolved -- it has been blocked by Claude Code's own permission classifier
-   since Stage C; the owner needs to either commit/push it directly or adjust
-   the relevant permission setting. **Tell me when this is done** -- the
-   clean-clone test and independent review are queued immediately after it.
+1. ~~Not committed to git.~~ **Resolved 20 Nov 2026**: committed, pushed, repo
+   made private. Clean-clone test done (section 8 note below) and independent
+   review done (section 0) -- the review's one real finding is already fixed.
 2. **Licensed data provider not in place; 100% of production's price data is
-   still yfinance.** The interim `OWNER_USER_IDS` guard (section 1) only hides
-   it from non-owner users; it does not replace the actual purge once a
-   licensed provider is backfilled.
+   still yfinance.** The `OWNER_USER_IDS` guard (section 1) now covers all three
+   known data-exposure surfaces (bars, watchlist, strategy-run/backtest), not
+   just the one route it originally covered -- but it still only HIDES the data
+   from non-owner users. It does not replace the actual purge once a licensed
+   provider is backfilled.
 3. **GitHub Actions cron does not exist** (`.github/workflows/` is empty/absent).
    No automated daily backfill, no anti-pause mechanism for the Supabase free
    project, once the backend is deployed anywhere persistent.
@@ -286,6 +321,35 @@ of what the free tier currently includes.
    production.
 5. `npm audit`'s 5 dev-tooling findings: accepted with a stated reason
    (section 4), not blocking, but not forgotten either.
+
+## 8. Clean-clone test (20 Nov 2026)
+
+Fresh `git clone` of the pushed `main` into a scratch directory, following
+README only. Found and fixed 3 real deviations:
+- `docker compose ... up -d db_test` fails outright if `.env` doesn't exist at
+  the repo root, even though `db_test` needs no secret. README now says so.
+- Backend needs `.env` in BOTH the repo root and `backend/` -- `app/config.py`
+  reads `.env` relative to the current directory, and every backend command
+  runs from inside `backend/`. README previously only said "repo root."
+- **Real bug, not just a doc gap**: `.env.example` ships `TEST_DATABASE_URL=`
+  blank; copying it verbatim sets that env var to `""`, which pydantic-settings
+  treats as a real value, silently overriding `config.py`'s non-empty default.
+  Every DB-writing test failed with "TEST_DATABASE_URL is not set" on an
+  untouched fresh clone. Fixed at the root with a `field_validator` (empty ->
+  use the default); 3 tests in `backend/tests/test_config.py`.
+
+Everything else matched README exactly: `pip install -e ".[dev]"`, plain
+`pytest` (208 passed, 125 skipped), `RUN_DB_TESTS=1 pytest` (332 passed once
+the two `.env` fixes were in place), `npm install`, `npm run build`,
+`npm run test`.
+
+**Also confirmed, not a deviation but worth recording**: `alembic`'s CLI always
+reads `DATABASE_URL`, never `TEST_DATABASE_URL` -- that env var only matters to
+`conftest.py`'s own pytest fixtures. A manual `TEST_DATABASE_URL=... alembic
+upgrade head` does nothing to `db_test`; it silently re-targets whatever
+`DATABASE_URL` resolves to instead. Harmless here since migrations are
+idempotent and `db_test` is migrated correctly by `conftest.py`'s fixture
+regardless, but worth knowing before relying on that command for anything.
 
 ## CEO decisions still open (CLAUDE.md section 11, restated)
 - US-only vs. TSX for the data provider.

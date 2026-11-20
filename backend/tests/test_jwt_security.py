@@ -116,7 +116,7 @@ def test_tampered_payload_is_rejected(_configured):
 # validity when present. A validly-SIGNED token that simply omits one of these
 # claims must still be rejected, on both verification branches. ---
 
-@pytest.mark.parametrize("missing_claim", ["exp", "sub", "iss"])
+@pytest.mark.parametrize("missing_claim", ["exp", "sub", "aud", "iss"])
 def test_token_missing_a_required_claim_is_rejected(_configured, missing_claim):
     token = jwt.encode(_claims_missing(_configured, missing_claim), SECRET, algorithm="HS256")
     with pytest.raises(HTTPException) as exc:
@@ -124,9 +124,10 @@ def test_token_missing_a_required_claim_is_rejected(_configured, missing_claim):
     assert exc.value.status_code == 401
 
 
-def test_jwks_path_also_enforces_required_claims(monkeypatch, _configured):
-    """Same `options={"require": [...]}` check, but on the JWKS/RS256 branch
-    instead of the legacy-HS256 branch every other test in this file uses."""
+def _rsa_jwks_fixture(monkeypatch):
+    """Forces the JWKS/RS256 branch (instead of the legacy-HS256 branch every
+    other test in this file uses) and returns the private key to sign tokens
+    with. Factored out so more than one test can exercise that branch cheaply."""
     from cryptography.hazmat.primitives.asymmetric import rsa
 
     import app.auth as auth_module
@@ -143,9 +144,37 @@ def test_jwks_path_also_enforces_required_claims(monkeypatch, _configured):
                         lambda url: type("C", (), {
                             "get_signing_key_from_jwt": lambda self, token: _FakeSigningKey(),
                         })())
+    return private_key
 
+
+def test_jwks_path_also_enforces_required_claims(monkeypatch, _configured):
+    private_key = _rsa_jwks_fixture(monkeypatch)
     token = jwt.encode(_claims_missing(_configured, "sub"), private_key, algorithm="RS256")
+    with pytest.raises(HTTPException) as exc:
+        _call(token)
+    assert exc.value.status_code == 401
 
+
+def test_jwks_path_also_rejects_expired_tokens(monkeypatch, _configured):
+    private_key = _rsa_jwks_fixture(monkeypatch)
+    token = jwt.encode(_claims(_configured, exp=int(time.time()) - 10), private_key, algorithm="RS256")
+    with pytest.raises(HTTPException) as exc:
+        _call(token)
+    assert exc.value.status_code == 401
+
+
+def test_jwks_path_also_rejects_wrong_issuer(monkeypatch, _configured):
+    private_key = _rsa_jwks_fixture(monkeypatch)
+    token = jwt.encode(_claims(_configured, iss="https://evil.example.com/auth/v1"),
+                       private_key, algorithm="RS256")
+    with pytest.raises(HTTPException) as exc:
+        _call(token)
+    assert exc.value.status_code == 401
+
+
+def test_jwks_path_also_rejects_wrong_audience(monkeypatch, _configured):
+    private_key = _rsa_jwks_fixture(monkeypatch)
+    token = jwt.encode(_claims(_configured, aud="something-else"), private_key, algorithm="RS256")
     with pytest.raises(HTTPException) as exc:
         _call(token)
     assert exc.value.status_code == 401

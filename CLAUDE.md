@@ -100,14 +100,37 @@ Consequences for this project:
    writes this way specifically so this cleanup is a single `WHERE source='yfinance'`
    away, not an audit.
 5. **Stage H licence guard, done 2026-11-20 (interim, not a replacement for the
-   purge above):** `GET /instruments/{id}/bars` (`app/routes/instruments.py`) refuses
-   with 503 if any returned row has `source='yfinance'` and the caller isn't in
-   `OWNER_USER_IDS` (`app/auth.py::is_owner`, fail-closed -- empty/unset means NO ONE,
-   not even the real owner, see it). This is NOT the Supabase Admin API-based
-   "how many real users exist" guard originally sketched for this item -- deliberately
-   simpler and keeps no service-role key in the backend at all. It buys time to run a
-   pilot with more than one allowed user before the provider switch lands; it does not
-   replace deleting the yfinance rows once a licensed provider is in place.
+   purge above):** `OWNER_USER_IDS` (`app/auth.py::is_owner`, fail-closed --
+   empty/unset means NO ONE, not even the real owner, sees it). Deliberately NOT
+   the Supabase Admin API-based "how many real users exist" guard originally
+   sketched for this item -- simpler, and keeps no service-role key in the
+   backend at all. It buys time to run a pilot with more than one allowed user
+   before the provider switch lands; it does not replace deleting the yfinance
+   rows once a licensed provider is in place.
+
+   **An independent review (2026-11-20) found the first version of this guard
+   only covered one route** (`GET /instruments/{id}/bars`), while `GET
+   /watchlist`'s `latest_close` and the entire `/strategy-runs/*` surface
+   (signals, fills, metrics, CSV export -- all derivable from yfinance-sourced
+   bars) leaked the same data to any allowlisted non-owner user with zero
+   check. Fixed the same day, in three places:
+   - `GET /instruments/{id}/bars`: 503 if any returned row is yfinance-sourced
+     and the caller isn't the owner (unchanged from the original version).
+   - `GET /watchlist`: `latest_close` is null and the new `latest_close_restricted`
+     field is `true` for a yfinance-sourced instrument shown to a non-owner --
+     a plain null would be indistinguishable from "no data at all", which is
+     its own kind of silent omission.
+   - `POST /strategy-runs` (`app/services/strategy_run.py::run_strategy`, new
+     `caller_is_owner` parameter, **default `False` -- fail closed**): an
+     instrument with any yfinance-sourced `price_bars` row is blocked for a
+     non-owner caller with reason `"licence_restricted"`, in the SAME
+     `blocked_instruments` dict the compliance gate already uses -- the
+     instrument never enters the run at all, so nothing downstream (signals,
+     fills, metrics, CSV) has to separately remember to re-check. `replay_strategy_run`
+     needs no change: it already copies `blocked_instruments` from the original
+     run verbatim rather than re-gating (same determinism reasoning as the
+     compliance gate, see the Stage D/E design note below), so a licence block
+     survives replay automatically.
 
 ---
 

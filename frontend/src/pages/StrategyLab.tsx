@@ -132,7 +132,7 @@ export default function StrategyLab({ session, onRunReady }: StrategyLabProps) {
                 <td>{r.symbol}</td>
                 <td>{r.blocking_reason ?? "ok"}</td>
                 <td>
-                  {r.latest_close ?? "--"}
+                  {r.latest_close_restricted ? "restricted (unlicensed source)" : r.latest_close ?? "--"}
                   {capExceeded && (
                     <span style={{ color: "#b02a37", marginLeft: 8 }}>
                       one share costs more than the position cap: no trades will happen

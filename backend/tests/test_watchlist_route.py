@@ -134,3 +134,80 @@ def test_no_bars_shows_null_latest_bar_ts(authed):
     row = next(r for r in client.get("/watchlist").json() if r["symbol"] == "ZWATCH")
 
     assert row["latest_bar_ts"] is None
+
+
+@run_db_tests
+def test_non_owner_sees_restricted_not_the_yfinance_price(authed):
+    """Stage H review finding: GET /watchlist was leaking latest_close for
+    yfinance-sourced instruments to any allowlisted non-owner user, with no
+    is_owner check at all."""
+    inst = _make_instrument(authed)
+    authed.add(PriceBar(instrument_id=inst.id, ts=NOW, interval="5m",
+                        open=Decimal("100"), high=Decimal("101"), low=Decimal("99"),
+                        close=Decimal("100.5"), volume=1000, source="yfinance"))
+    authed.commit()
+
+    row = next(r for r in client.get("/watchlist").json() if r["symbol"] == "ZWATCH")
+
+    assert row["latest_close"] is None
+    assert row["latest_close_restricted"] is True
+    # latest_bar_ts is NOT price data -- just freshness -- so it's still shown.
+    assert row["latest_bar_ts"] is not None
+
+
+@pytest.fixture
+def authed_as_owner(db_conn, monkeypatch):
+    from app.config import get_settings
+
+    def _fake_session():
+        yield db_conn
+
+    # Fixed id, computed once -- unlike `authed` above (whose lambda calls
+    # uuid4() on every invocation, fine for tests that never need to know the
+    # id in advance), this one must match owner_user_ids on every request.
+    user_id = uuid4()
+    monkeypatch.setattr(get_settings(), "owner_user_ids", str(user_id))
+    app.dependency_overrides[current_user] = lambda: AuthUser(id=user_id, email="o@example.com")
+    app.dependency_overrides[get_session] = _fake_session
+    return db_conn
+
+
+@run_db_tests
+def test_owner_sees_the_yfinance_price(authed_as_owner):
+    inst = _make_instrument(authed_as_owner)
+    authed_as_owner.add(PriceBar(instrument_id=inst.id, ts=NOW, interval="5m",
+                                 open=Decimal("100"), high=Decimal("101"), low=Decimal("99"),
+                                 close=Decimal("100.5"), volume=1000, source="yfinance"))
+    authed_as_owner.commit()
+
+    row = next(r for r in client.get("/watchlist").json() if r["symbol"] == "ZWATCH")
+
+    assert row["latest_close"] == "100.5000"  # NUMERIC(18,4)
+    assert row["latest_close_restricted"] is False
+
+
+@run_db_tests
+def test_non_yfinance_price_never_restricted(authed):
+    inst = _make_instrument(authed)
+    authed.add(PriceBar(instrument_id=inst.id, ts=NOW, interval="5m",
+                        open=Decimal("100"), high=Decimal("101"), low=Decimal("99"),
+                        close=Decimal("100.5"), volume=1000, source="manual"))
+    authed.commit()
+
+    row = next(r for r in client.get("/watchlist").json() if r["symbol"] == "ZWATCH")
+
+    assert row["latest_close"] == "100.5000"  # NUMERIC(18,4)
+    assert row["latest_close_restricted"] is False
+
+
+@run_db_tests
+def test_no_data_is_distinguishable_from_restricted_data(authed):
+    """null latest_close alone is ambiguous -- latest_close_restricted is what
+    tells "no data" and "data withheld" apart."""
+    _make_instrument(authed)
+    authed.commit()
+
+    row = next(r for r in client.get("/watchlist").json() if r["symbol"] == "ZWATCH")
+
+    assert row["latest_close"] is None
+    assert row["latest_close_restricted"] is False

@@ -12,7 +12,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from app.market_calendar import EXCHANGE_CALENDARS
@@ -28,6 +28,16 @@ INTERVAL_MINUTES = 5
 # trading day can be as short as a half day, so this is a safety bound, not a tuned
 # constant; it only has to comfortably exceed slow_period / (bars in a half day).
 MAX_LOOKBACK_SEARCH_DAYS = 180
+
+# Stage H review finding: the licence guard originally only covered
+# GET /instruments/{id}/bars -- a non-owner could still run a full backtest
+# against a yfinance-sourced instrument and reconstruct most of the underlying
+# price series from the resulting signals/orders/fills/metrics/CSV export, none
+# of which had any owner check at all. Blocked here instead, at the same gate
+# that already blocks non-compliant instruments, so it's a "this instrument never
+# entered the run" fact baked into blocked_instruments -- not something a route
+# downstream has to remember to re-check.
+LICENCE_RESTRICTED = "licence_restricted"
 
 
 class UnknownInstrument(Exception):
@@ -51,6 +61,14 @@ class UnsupportedExchange(Exception):
 class StrategyRunNotFound(Exception):
     def __init__(self, run_id: int):
         self.run_id = run_id
+
+
+def _has_yfinance_data(session: Session, instrument_id: int) -> bool:
+    return bool(session.scalar(
+        select(exists().where(
+            PriceBar.instrument_id == instrument_id, PriceBar.source == "yfinance",
+        ))
+    ))
 
 
 def _calendar_for(inst: Instrument) -> str:
@@ -136,6 +154,7 @@ def run_strategy(
     slippage_bps: Decimal,
     reset_ma_each_session: bool,
     now: datetime,
+    caller_is_owner: bool = False,
 ) -> StrategyRun:
     sorted_ids = sorted(instrument_ids)
     instruments_by_id: dict[int, Instrument] = {}
@@ -171,6 +190,9 @@ def run_strategy(
     blocked: dict[str, str] = {}
     check_ids: dict[str, int] = {}
     for instrument_id in sorted_ids:
+        if not caller_is_owner and _has_yfinance_data(session, instrument_id):
+            blocked[str(instrument_id)] = LICENCE_RESTRICTED
+            continue
         try:
             check_ids[str(instrument_id)] = assert_tradable(session, instrument_id, now)
         except ComplianceBlocked as exc:

@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth import AuthUser, current_user
+from app.auth import AuthUser, current_user, is_owner
 from app.db import get_session
 from app.models.compliance import ComplianceCheck
 from app.models.instrument import Instrument
@@ -30,6 +30,11 @@ class WatchlistRow(BaseModel):
     days_until_expiry: int | None
     latest_bar_ts: str | None
     latest_close: str | None  # Decimal-as-string; Stage F's Strategy Lab price warning
+    # Stage H review finding: null alone can't distinguish "no data" from "data
+    # exists but is unlicensed (yfinance) and you're not the owner" -- that would
+    # be exactly the kind of silent omission CLAUDE.md warns against elsewhere.
+    # True only in the second case; latest_close is null either way then.
+    latest_close_restricted: bool
     evidence_url: str | None  # already validated http(s)-only at write time
 
 
@@ -43,6 +48,7 @@ def get_watchlist(
     session: Session = Depends(get_session),
 ) -> list[WatchlistRow]:
     now = datetime.now(timezone.utc)
+    caller_is_owner = is_owner(user)
     instruments = session.scalars(
         select(Instrument).where(Instrument.active.is_(True)).order_by(Instrument.symbol)
     ).all()
@@ -60,6 +66,8 @@ def get_watchlist(
             select(PriceBar).where(PriceBar.instrument_id == inst.id)
             .order_by(PriceBar.ts.desc()).limit(1)
         )
+        price_restricted = (latest_bar is not None and latest_bar.source == "yfinance"
+                            and not caller_is_owner)
 
         rows.append(WatchlistRow(
             id=inst.id,
@@ -71,7 +79,9 @@ def get_watchlist(
             expires_at=_iso(check.expires_at) if check is not None else None,
             days_until_expiry=(check.expires_at - now).days if check is not None else None,
             latest_bar_ts=_iso(latest_bar.ts) if latest_bar is not None else None,
-            latest_close=str(latest_bar.close) if latest_bar is not None else None,
+            latest_close=(None if price_restricted or latest_bar is None
+                         else str(latest_bar.close)),
+            latest_close_restricted=price_restricted,
             evidence_url=check.evidence_url if check is not None else None,
         ))
     return rows
