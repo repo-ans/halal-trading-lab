@@ -3,9 +3,9 @@ import type { WatchlistRow } from "../types";
 const EXPIRING_SOON_DAYS = 14;
 
 const BLOCKED_LABELS: Record<string, string> = {
-  not_halal: "Not halal",
-  doubtful: "Doubtful",
-  not_covered: "Not covered",
+  NON_COMPLIANT: "Not halal",
+  QUESTIONABLE: "Doubtful",
+  UNRATED: "Not covered",
   expired: "Expired",
 };
 

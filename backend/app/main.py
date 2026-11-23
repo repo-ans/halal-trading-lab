@@ -14,6 +14,7 @@ from app.config import get_settings
 from app.demo_mode import assert_demo_db_is_safe
 from app.routes.compliance import router as compliance_router
 from app.routes.instruments import router as instruments_router
+from app.routes.replay import router as replay_router
 from app.routes.strategy_runs import router as strategy_runs_router
 from app.routes.watchlist import router as watchlist_router
 from app.scheduler import create_scheduler, run_backfill_job
@@ -86,6 +87,7 @@ app.include_router(instruments_router)
 app.include_router(compliance_router)
 app.include_router(watchlist_router)
 app.include_router(strategy_runs_router)
+app.include_router(replay_router)
 
 
 def get_backfill_runner() -> Callable[[], BackfillReport | None]:

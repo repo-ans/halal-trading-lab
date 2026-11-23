@@ -71,24 +71,25 @@ def _mock_session_returning(check: ComplianceCheck | None) -> MagicMock:
 
 
 def test_3_non_compliant_or_expired_symbols_are_rejected():
-    """Missing, not_halal, doubtful, not_covered, or expired record -> order refused.
-    This is the GATE-level test (app/services/compliance.py::assert_tradable); an
-    engine-level integration test is added at Stage E once the paper engine actually
-    calls this gate before placing an order (CLAUDE.md section 5 / Stage D-E note)."""
+    """Missing, NON_COMPLIANT, QUESTIONABLE, UNRATED, or expired record -> order
+    refused. This is the GATE-level test (app/services/compliance.py::assert_tradable);
+    an engine-level integration test is added at Stage E once the paper engine
+    actually calls this gate before placing an order (CLAUDE.md section 5 / Stage
+    D-E note)."""
     now = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
 
     with pytest.raises(ComplianceBlocked) as exc:
         assert_tradable(_mock_session_returning(None), 1, now)
     assert exc.value.reason == "no_record"
 
-    for status in ("not_halal", "doubtful", "not_covered"):
+    for status in ("NON_COMPLIANT", "QUESTIONABLE", "UNRATED"):
         check = ComplianceCheck(status=status, checked_at=now - timedelta(days=1),
                                 expires_at=now + timedelta(days=89))
         with pytest.raises(ComplianceBlocked) as exc:
             assert_tradable(_mock_session_returning(check), 1, now)
         assert exc.value.reason == status
 
-    expired = ComplianceCheck(status="halal", checked_at=now - timedelta(days=100),
+    expired = ComplianceCheck(status="COMPLIANT", checked_at=now - timedelta(days=100),
                               expires_at=now - timedelta(days=1))
     with pytest.raises(ComplianceBlocked) as exc:
         assert_tradable(_mock_session_returning(expired), 1, now)

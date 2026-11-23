@@ -45,6 +45,9 @@ the repo-root copy alone is not enough once you `cd backend`). Also copy the
 | `AI_API_KEY` | backend | Anthropic API key for Stage G's LLM summary mode; empty disables LLM mode (template mode still works) |
 | `AI_MODEL` | backend | Model id for LLM summaries, default `claude-haiku-5-5` |
 | `AI_SUMMARY_DAILY_CAP` | backend | Per-user rolling-24h cap on LLM attempts, default 5 |
+| `ZOYA_API_KEY` | backend | Zoya Finance API key (sandbox only so far); empty disables the admin-only Zoya lookup (503). Lookup-only -- never writes a compliance record by itself |
+| `ZOYA_API_URL` | backend | Defaults to Zoya's sandbox endpoint (randomized dummy data); switch to the live endpoint only once a live key exists |
+| `ZOYA_TIMEOUT_SECONDS` | backend | Per-call timeout for the Zoya lookup request, default 10 |
 | `VITE_SUPABASE_URL` | frontend | Same project URL |
 | `VITE_SUPABASE_ANON_KEY` | frontend | Public anon key |
 | `VITE_API_URL` | frontend | Backend base URL |

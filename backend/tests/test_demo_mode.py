@@ -165,7 +165,7 @@ def test_refuse_if_target_has_non_demo_data(db_conn):
     db_conn.flush()
     from app.services.compliance import create_compliance_check
     create_compliance_check(
-        db_conn, instrument_id=inst.id, status="halal", source="manual",
+        db_conn, instrument_id=inst.id, status="COMPLIANT", source="manual",
         checked_at=datetime(2026, 11, 1, tzinfo=timezone.utc),
         expires_at=datetime(2027, 2, 1, tzinfo=timezone.utc), created_by=None,
         evidence_url="https://example.com", notes="a real screening note, not a fixture",
@@ -183,7 +183,7 @@ def test_refuse_if_target_has_non_demo_data_allows_only_fixtures(db_conn):
     db_conn.flush()
     from app.services.compliance import create_compliance_check
     create_compliance_check(
-        db_conn, instrument_id=inst.id, status="halal", source="manual",
+        db_conn, instrument_id=inst.id, status="COMPLIANT", source="manual",
         checked_at=datetime(2026, 11, 1, tzinfo=timezone.utc),
         expires_at=datetime(2027, 2, 1, tzinfo=timezone.utc), created_by=seed_demo.DEMO_CREATED_BY,
         evidence_url=seed_demo.DEMO_EVIDENCE_URL, notes=seed_demo.DEMO_NOTES,
@@ -202,7 +202,7 @@ def test_create_fixture_stops_if_the_real_validation_rejects_it(monkeypatch):
                         lambda *a, **kw: calls.append((a, kw)))
 
     now = datetime(2026, 11, 18, tzinfo=timezone.utc)
-    spec = {"status": "halal", "checked_at": now - timedelta(days=1),
+    spec = {"status": "COMPLIANT", "checked_at": now - timedelta(days=1),
            "expires_at": now + timedelta(days=90)}
 
     with pytest.raises(SystemExit):

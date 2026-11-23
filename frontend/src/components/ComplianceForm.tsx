@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { postCompliance } from "../lib/api";
+import { fetchZoyaLookup, postCompliance } from "../lib/api";
 import type { ComplianceStatus, WatchlistRow } from "../types";
 
 interface ComplianceFormProps {
@@ -11,7 +11,7 @@ interface ComplianceFormProps {
 export default function ComplianceForm({ token, rows }: ComplianceFormProps) {
   const queryClient = useQueryClient();
   const [instrumentId, setInstrumentId] = useState<number | "">("");
-  const [status, setStatus] = useState<ComplianceStatus>("halal");
+  const [status, setStatus] = useState<ComplianceStatus>("COMPLIANT");
   const [source, setSource] = useState<"manual" | "zoya" | "musaffa">("manual");
   const [evidenceUrl, setEvidenceUrl] = useState("");
   const [notes, setNotes] = useState("");
@@ -41,6 +41,23 @@ export default function ComplianceForm({ token, rows }: ComplianceFormProps) {
     },
   });
 
+  // A SUGGESTION only -- never writes anything. Only pre-fills status/source
+  // below; evidence_url is deliberately left for the admin to fill in by hand,
+  // since Zoya's API gives no evidence link at all (CLAUDE.md section 5: a
+  // human still verifies evidence before Save writes anything).
+  const zoyaLookup = useMutation({
+    mutationFn: () => {
+      if (instrumentId === "") throw new Error("choose an instrument first");
+      return fetchZoyaLookup(instrumentId, token);
+    },
+    onSuccess: (result) => {
+      if (result.available && result.status) {
+        setStatus(result.status);
+        setSource("zoya");
+      }
+    },
+  });
+
   return (
     <form
       onSubmit={(e) => {
@@ -62,11 +79,19 @@ export default function ComplianceForm({ token, rows }: ComplianceFormProps) {
             </option>
           ))}
         </select>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          disabled={instrumentId === "" || zoyaLookup.isPending}
+          onClick={() => zoyaLookup.mutate()}
+        >
+          {zoyaLookup.isPending ? "Looking up..." : "Look up via Zoya"}
+        </button>
         <select value={status} onChange={(e) => setStatus(e.target.value as ComplianceStatus)}>
-          <option value="halal">halal</option>
-          <option value="not_halal">not_halal</option>
-          <option value="doubtful">doubtful</option>
-          <option value="not_covered">not_covered</option>
+          <option value="COMPLIANT">COMPLIANT</option>
+          <option value="NON_COMPLIANT">NON_COMPLIANT</option>
+          <option value="QUESTIONABLE">QUESTIONABLE</option>
+          <option value="UNRATED">UNRATED</option>
         </select>
         <select
           value={source}
@@ -78,7 +103,11 @@ export default function ComplianceForm({ token, rows }: ComplianceFormProps) {
         </select>
         <input
           type="url"
-          placeholder="Evidence URL (https://...)"
+          placeholder={
+            source === "zoya"
+              ? "Zoya gives no evidence link -- add one manually"
+              : "Evidence URL (https://...)"
+          }
           value={evidenceUrl}
           onChange={(e) => setEvidenceUrl(e.target.value)}
           style={{ minWidth: 220 }}
@@ -97,6 +126,23 @@ export default function ComplianceForm({ token, rows }: ComplianceFormProps) {
           {mutation.isPending ? "Saving..." : "Save"}
         </button>
       </div>
+      {zoyaLookup.isError && (
+        <p className="error-text">{(zoyaLookup.error as Error).message}</p>
+      )}
+      {zoyaLookup.data && !zoyaLookup.data.available && (
+        <p className="subtle">Zoya has no coverage for this symbol.</p>
+      )}
+      {zoyaLookup.data && zoyaLookup.data.available && (
+        <p className={zoyaLookup.data.is_sandbox ? "banner banner-warning" : "subtle"}>
+          Zoya suggests <strong>{zoyaLookup.data.status}</strong>
+          {zoyaLookup.data.zoya_name && ` for ${zoyaLookup.data.zoya_name}`}
+          {zoyaLookup.data.report_date && ` (reported ${zoyaLookup.data.report_date.slice(0, 10)})`}
+          {zoyaLookup.data.purification_ratio !== null &&
+            `, purification ratio ${zoyaLookup.data.purification_ratio}`}
+          . Status and source were pre-filled above -- add real evidence before saving.
+          {zoyaLookup.data.is_sandbox && " SANDBOX RESULT: randomized dummy data, not a real ruling."}
+        </p>
+      )}
       {mutation.isError && (
         <p className="error-text">{(mutation.error as Error).message}</p>
       )}

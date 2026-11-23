@@ -221,15 +221,22 @@ adapter.
 
 ## 5. Halal compliance — manual in MVP, by design
 
-Zoya and Musaffa both have B2B APIs, but both are enterprise sales-gated (no
-self-serve signup), so access takes weeks. **The MVP does not need them.**
+Zoya and Musaffa both have B2B APIs, both enterprise sales-gated for a LIVE key
+(no self-serve signup, access takes weeks). **Correction, 2026-11-23:** Zoya does
+offer a self-serve SANDBOX key with no subscription required (randomized dummy
+data, not real screening) — the owner obtained one. This does not change the
+original decision that **the MVP does not need a live provider integration to
+ship**; see the Zoya lookup subsection below for what was actually built with the
+sandbox key, and why it stops well short of a live integration.
 
 The MVP implements an **admin compliance form + CSV import**, which is what the
 developer plan's Stage C actually specifies, and matches the owner's intent that the
 approved list be supplied to the app.
 
 Each compliance record stores:
-- symbol, status (`halal` / `not_halal` / `doubtful` / `not_covered`)
+- symbol, status (`COMPLIANT` / `NON_COMPLIANT` / `QUESTIONABLE` / `UNRATED` --
+  renamed 2026-11-23 from `halal`/`not_halal`/`doubtful`/`not_covered` to match
+  Zoya's own enum; see the Zoya lookup subsection below for why)
 - source (`manual` / `zoya` / `musaffa`) and evidence (link or uploaded file)
 - `checked_at` and `expires_at` (default 90 days)
 
@@ -239,14 +246,14 @@ the paper engine must refuse the order.** This is a must-pass test, not a warnin
 The app never computes or infers a halal ruling itself. Ever.
 
 **UNCONFIRMED ASSUMPTIONS (Stage C, flagged, not yet confirmed by the owner):**
-- `doubtful` and `not_covered` block trading exactly like `not_halal`. Revisit if the
-  owner wants `doubtful` to warn-but-allow instead.
+- `QUESTIONABLE` and `UNRATED` block trading exactly like `NON_COMPLIANT`. Revisit
+  if the owner wants `QUESTIONABLE` to warn-but-allow instead.
 - Default `expires_at` is `checked_at + 90 days`
   (`COMPLIANCE_DEFAULT_VALIDITY_DAYS`, `backend/app/config.py`).
 
 **Gate implementation (Stage C):** `app/services/compliance.py`.
 `effective_status(check, now)` returns `"ok"` or one of the five reason codes
-(`no_record`, `not_halal`, `doubtful`, `not_covered`, `expired`); `assert_tradable
+(`no_record`, `NON_COMPLIANT`, `QUESTIONABLE`, `UNRATED`, `expired`); `assert_tradable
 (session, instrument_id, now)` raises `ComplianceBlocked(reason)` and, on success,
 returns the `compliance_checks.id` it used. `now` is always an explicit parameter,
 never read from the wall clock inside the gate — see §7's determinism note for why.
@@ -270,12 +277,12 @@ one:
 
 | Symbol | Status | Notes |
 |---|---|---|
-| `DEMO-OK` | `halal`, valid | far from expiry |
-| `DEMO-SOON` | `halal`, expires within 14 days | exercises the amber watchlist badge |
-| `DEMO-EXPIRED` | `halal`, already expired | exercises the `expired` gate reason |
-| `DEMO-NOTHALAL` | `not_halal` | |
-| `DEMO-DOUBTFUL` | `doubtful` | |
-| `DEMO-NOCOVER` | `not_covered` | |
+| `DEMO-OK` | `COMPLIANT`, valid | far from expiry |
+| `DEMO-SOON` | `COMPLIANT`, expires within 14 days | exercises the amber watchlist badge |
+| `DEMO-EXPIRED` | `COMPLIANT`, already expired | exercises the `expired` gate reason |
+| `DEMO-NOTHALAL` | `NON_COMPLIANT` | |
+| `DEMO-DOUBTFUL` | `QUESTIONABLE` | |
+| `DEMO-NOCOVER` | `UNRATED` | |
 
 The 4 real symbols (AAPL/MSFT/KO/RY) get **no** compliance record in the demo
 database either — they show `no_record`, same as any newly-seeded symbol in
@@ -290,9 +297,77 @@ compliance records enter production only through the admin form or the CSV impor
 (both above), after a human has verified the status against Zoya/Musaffa evidence
 — never through this script, never inferred by the app itself.
 
+### Zoya lookup — a suggestion, never a write — done 2026-11-23
+
+`GET /compliance/zoya-lookup?instrument_id=` (admin-only, `app/routes/compliance.py`)
+calls `app/providers/compliance/zoya.py::ZoyaProvider` (Zoya's GraphQL API,
+`basicCompliance.report(symbol)`) and returns a suggested status for an admin to
+review — **it never writes to `compliance_checks` itself.** Two real constraints
+forced this design, discovered by querying the actual sandbox schema rather than
+guessing:
+
+1. **Zoya's report has no evidence URL or report-page link at all** — just
+   `symbol`, `status`, `purificationRatio`, `reportDate`. The existing rule that a
+   `COMPLIANT` record needs `evidence_url` or an uploaded file (§ above) has
+   nothing to point at from Zoya's response alone.
+2. **Only a sandbox key exists; sandbox returns randomized dummy data** per Zoya's
+   own developer dashboard — structurally identical to §3's yfinance situation,
+   and given the same treatment: usable for building and testing the integration,
+   never presented as a real ruling.
+
+So the route returns a suggestion only (status + Zoya's own name/exchange match +
+`purification_ratio` + `report_date` + `is_sandbox`), and `ComplianceForm.tsx`
+pre-fills `status`/`source="zoya"` from it — evidence_url is deliberately left
+blank for the admin to fill in by hand, and a sandbox result is labeled
+"SANDBOX RESULT: randomized dummy data, not a real ruling" in the UI, not just
+documented here. The actual write still goes through the existing, already-tested
+`POST /compliance`, with the exact same evidence/append-only rules as a fully
+manual entry — nothing about the write path changed.
+
+`ZoyaProvider.get_record()` also implements the generic `ComplianceProvider`
+interface from §4's architecture diagram (for future polymorphic callers); the
+richer `get_report()` (with `purification_ratio`/`name`/`exchange`) is Zoya
+-specific and used only by this route, per §4's "no provider-specific fields may
+leak outside its adapter" rule. The Authorization header is the raw key with no
+`Bearer` prefix — confirmed against the live sandbox endpoint, not assumed from
+docs (Zoya's public docs are JS-rendered and weren't fetchable; introspection
+against the sandbox endpoint was used instead). An API failure or an unrecognized
+status value raises and surfaces as a 502, never silently treated as "no
+coverage" (same "fail loudly" principle as must-pass test 6, applied to
+compliance data instead of price data).
+
+**Switching to a live key, if one is obtained:** change `ZOYA_API_URL` to
+`https://api.zoya.finance/graphql` and `ZOYA_API_KEY` to the live key. No code
+change needed. The evidence-URL gap doesn't go away just because the key is
+live, though — that's still an open question for whoever reviews this next.
+
+### Status vocabulary renamed to match Zoya's enum — done 2026-11-23
+
+`halal`/`not_halal`/`doubtful`/`not_covered` → `COMPLIANT`/`NON_COMPLIANT`/
+`QUESTIONABLE`/`UNRATED`, everywhere: the DB CHECK constraint, `app/services/
+compliance.py`'s `BLOCKED_STATUSES` and gate logic, `app/routes/compliance.py`
+and `app/services/compliance_csv.py`'s `VALID_STATUSES`, both compliance
+providers (`mock.py`'s fixtures, `zoya.py`'s now-identity-but-still-explicit
+`_STATUS_MAP`), `scripts/seed_demo.py`'s six fixtures, the frontend's
+`ComplianceStatus` type/form/badge labels, and the entire test suite. **Pure
+vocabulary rename, not a behavior change** — the four states, which ones block
+trading, and "a human still verifies every record before it's written" are all
+unchanged; only the stored string values are different.
+
+**This was a DATA migration, not just a schema one.** `compliance_checks` is
+append-only (migration 0003's trigger rejects any UPDATE that touches
+`status`), so migration 0007 has to lift that trigger for its own bulk
+rewrite UPDATE, then restore it immediately after — the only migration in this
+project that does that, and deliberately scoped to nothing beyond that one
+scripted statement. Apply to `db_test` first (full suite), then `db_demo`,
+then production, `alembic current` shown before/after each, same as always.
+If existing demo/production compliance rows aren't converted, the app and the
+database disagree about the status vocabulary and every read/write breaks --
+this migration is not optional once the code above is deployed.
+
 ---
 
-## 6. Database schema — 8 tables
+## 6. Database schema — 10 tables
 
 Names from the developer plan. All timestamps `TIMESTAMPTZ` stored in **UTC**. All
 money and price columns `NUMERIC(18,4)` — never `float`/`double`.
@@ -336,6 +411,21 @@ money and price columns `NUMERIC(18,4)` — never `float`/`double`.
    `requested_mode`, `llm_attempts`, `model_version`, `prompt_version`,
    `input_hash`, with `UNIQUE(strategy_run_id, requested_mode)` — see §7's Stage
    G subsection.
+9. **`replay_sessions`** — Replay Trading (migration 0008, see §7's subsection
+   below): user_id, instrument_id, `session_day`, the same cost-assumption
+   columns as `strategy_runs` (`starting_cash`, `max_position_value`,
+   `commission_per_order`, `spread_bps`, `slippage_bps`), a single
+   `compliance_check_id` snapshot (one instrument per session, so no JSONB
+   dict is needed here unlike `strategy_runs.compliance_check_ids`), `status`
+   (`'active'`/`'completed'`), `started_at`/`finished_at`.
+10. **`replay_fills`** — replay_session_id, origin (`'manual'`/`'eod_exit'`),
+    side, fill_ts, fill_price, qty, commission, spread_cost, slippage_cost,
+    cash_balance_after, `realized_pnl` (set only on a `'sell'` fill). The
+    ledger AND the trade history in one table — there is no `replay_orders`
+    table: a rejected manual click is an immediate API error, never
+    persisted, so only a fill that actually happened is ever written here.
+    Position is derived from the latest row for a session, never stored
+    redundantly (same principle as `paper_fills`).
 
 Sizing check: 20 symbols × 78 bars/day × 250 days ≈ 390k rows/year ≈ ~40 MB.
 Supabase's free 500 MB is fine for several years.
@@ -677,6 +767,84 @@ generated entirely from `paper_orders`/`paper_fills`/Stage F's computed
 live price, never a fresh compliance lookup) -- see Stage F's note above on
 `compute_metrics`.
 
+### Replay Trading — manual Buy/Sell against a replaying chart — done 2026-11-23
+
+A new, separate screen (owner's request: **"amar erokom real stock prices
+lagbe like simul8or, dummy balance dekhabe, buy sell kora jabe"** -- a
+Simul8or-style manual trading simulator), built alongside Strategy Lab's
+automated 5/20 MA backtest, never replacing it. A human picks one instrument
+and one historical trading day, the chart replays that day's real 5-minute
+bars one at a time, and the user clicks Buy/Sell against a live dummy
+balance. Deliberately its own tables (`replay_sessions`/`replay_fills`, §6)
+and its own service (`app/services/replay_engine.py`), not
+`strategy_runs`/`paper_orders`/`paper_fills` -- those are the automated-
+backtest/determinism machinery (`config_hash`, replay-by-snapshot); a
+human's own clicks are the "signal" here, so there's no determinism
+requirement to preserve.
+
+**Reuses, never re-specifies, Stage E's rules** -- the adverse-price-
+adjustment and cost-breakdown formula was extracted out of
+`app/services/paper_engine.py` into `app/services/cost_model.py`
+(`adverse_fill_price`/`cost_breakdown`) specifically so both engines call the
+exact same code; `paper_engine.py`'s own `_adverse_fill_price`/
+`_cost_breakdown` are now thin aliases onto it so nothing else had to change.
+Same long-only, one-open-position, $200 max position, EOD auto-flat rules as
+Stage E (§7 above), same compliance gate (`assert_tradable`), same market-
+calendar session logic (`session_bar_opens`).
+
+**No "Reverse" button.** Simul8or's reference flow has one, but CLAUDE.md
+section 1 rules out shorting entirely -- flipping a long position straight
+into a short is exactly what's out of scope. The frontend's "Sell (go flat)"
+button is the only way to close a position; there is no third action.
+
+**No-look-ahead, applied to a human click instead of a detected MA cross**
+(§7's must-pass test 4): a click while looking at bar T fills at bar T+1's
+open, in the SAME session, never at bar T's own close
+(`replay_engine.py::_next_execution_ts`). Clicking while looking at a
+session's last bar is rejected outright (`no_next_bar_in_session`) -- there
+is no T+1 left to fill at. This differs from Stage D's signal-at-last-bar
+handling only in how the user finds out: Stage D silently discards such a
+signal (nothing to show, no one is watching); here a human clicked, so it's
+an explicit rejection with a plain-language reason, not a silent no-op.
+
+**Compliance gate evaluated ONCE at session creation**, with the real clock,
+exactly like Stage D/E's design note above -- never re-checked bar by bar
+while the user clicks through the same historical day. The `compliance_check_id`
+used is snapshotted on `replay_sessions`, same reasoning as
+`strategy_runs.compliance_check_ids`.
+
+**Licence guard reused, not re-invented**: a yfinance-sourced instrument is
+blocked for a non-owner caller at session creation (`LicenceRestricted`,
+503), the same rule `run_strategy`/`GET /instruments/{id}/bars` already
+apply (§3).
+
+**EOD exit**: ending a session (`POST /replay-sessions/{id}/end`) auto-flats
+any open position at the session's last bar's open -- same rule as Stage E's
+EOD exit. If that bar's price is missing, the session stays `'active'`
+rather than ever completing with an unresolved position silently dropped
+(must-pass test 6: never invent a price) -- `execution_bar_missing_eod`,
+surfaced as a 502 so the frontend can show it plainly rather than claim
+success.
+
+**`realized_pnl`** is computed per-fill, on the closing `'sell'` row, using
+the exact same formula as Stage F's `compute_metrics`
+((`sell.fill_price - buy.fill_price) * qty - buy.commission -
+sell.commission`) -- so a trade's P&L is visible the instant it closes,
+without waiting on a separate metrics computation.
+
+**No separate `replay_orders` table** (unlike `paper_orders`/`paper_fills`):
+a rejected manual click is an immediate 422/409 API error
+(`app/routes/replay.py`'s `_REJECTION_MESSAGES`), never written anywhere.
+Only a fill that actually happened is ever persisted to `replay_fills`.
+Position and running cash are derived from the latest `replay_fills` row for
+a session, never stored redundantly on `replay_sessions` itself.
+
+**Chart data reuses the existing `GET /instruments/{id}/bars` endpoint** --
+the frontend fetches the whole day's bars once and animates through them
+locally (Play/Pause, 1x/4x/8x speed, Step); no new bar-serving endpoint was
+added. Unrealized P&L on an open position is computed client-side from the
+currently-revealed bar's close, never a second backend round-trip.
+
 ---
 
 ## 8. Time, calendars, and money
@@ -744,16 +912,18 @@ interpolate, or fall back to the last known price to keep a run alive.
 | F | Dashboard: watchlist, results, trade history, CSV export | Done 2026-11-19 (Strategy Lab, Virtual Trades, Dashboard, realized equity curve, CSV export, no new migration) |
 | G | AI review — plain-language summaries from computed metrics only | Done 2026-11-20 (number-safety placeholder substitution, phrase guard, cost cap with row-lock + daily cap, SecretStr key, plain-text-only rendering, migration 0006 on db_test and production) |
 | H | Automated tests, security checks, demo data, licence check | Demo data done 2026-11-18 (ahead of schedule). Security hardening done 2026-11-20: user allowlist, interim yfinance licence guard, JWT issuer validation + security test suite, per-user rate limiting, error-response safety test, gitleaks/pip-audit/npm audit run, read-only production structural checks, `docs/RELEASE_CHECKLIST.md` written. **Still open:** commit/push (blocks clean-clone test + independent review), licensed provider + yfinance purge, GitHub Actions cron, backup role + restore drill not yet executed against production — see `docs/RELEASE_CHECKLIST.md` |
+| — | Replay Trading (manual Buy/Sell screen, not in the original developer plan) | Done 2026-11-23: migration 0008 (`replay_sessions`/`replay_fills`, RLS enabled), `app/services/cost_model.py` extracted + `app/services/replay_engine.py`, `app/routes/replay.py`, `frontend/src/pages/ReplayTrading.tsx`. 20 new backend tests (engine + route) passing against `halal_test`; applied to `halal_test` and `halal_demo`. **Still open:** apply migration 0008 to production (owner to run, per §12's permission-classifier note below); no demo instrument currently has both price bars AND a compliance record at once (seed_demo.py's real symbols have bars but no compliance, DEMO-* fixtures have compliance but no bars) -- add one manual (clearly-labeled test) compliance record via the Watchlist admin form for a real symbol to demo this screen end-to-end |
 
 Target milestones: wk 1 requirements + provider decision · wk 2 watchlist +
 compliance · wk 3–4 backtest engine, ledger, dashboard · wk 5 testing + AI
 summaries · wk 6 owner pilot (virtual funds only).
 
-### Four screens
+### Five screens
 1. **Watchlist** — symbol, halal status, last checked, data timestamp
 2. **Strategy Lab** — pick instrument and date range, run backtest
-3. **Virtual Trades** — every simulated buy/sell with reason, price, fees; CSV export
-4. **Dashboard** — starting cash, ending equity, P/L, win rate, avg win/loss, max drawdown
+3. **Replay Trading** — manual Buy/Sell against a replaying chart, live dummy balance (added 2026-11-23, see §7's subsection)
+4. **Virtual Trades** — every simulated buy/sell with reason, price, fees; CSV export
+5. **Dashboard** — starting cash, ending equity, P/L, win rate, avg win/loss, max drawdown
 
 ---
 

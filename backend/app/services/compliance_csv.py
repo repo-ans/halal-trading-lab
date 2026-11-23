@@ -17,7 +17,7 @@ MAX_ROWS = 500
 MAX_FILE_BYTES = 1024 * 1024  # 1 MB
 REQUIRED_COLUMNS = {"symbol", "exchange", "status", "source", "evidence_url",
                     "checked_at", "expires_at", "notes"}
-VALID_STATUSES = {"halal", "not_halal", "doubtful", "not_covered"}
+VALID_STATUSES = {"COMPLIANT", "NON_COMPLIANT", "QUESTIONABLE", "UNRATED"}
 VALID_SOURCES = {"manual", "zoya", "musaffa"}
 
 

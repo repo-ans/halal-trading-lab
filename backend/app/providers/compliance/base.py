@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 
-STATUSES = ("halal", "not_halal", "doubtful", "not_covered")
+STATUSES = ("COMPLIANT", "NON_COMPLIANT", "QUESTIONABLE", "UNRATED")
 SOURCES = ("manual", "zoya", "musaffa")
 
 

@@ -62,7 +62,7 @@ def _insert_bars(session, instrument_id: int, closes: list[int]) -> list[datetim
 
 def _make_compliant(session, instrument_id: int, now: datetime, notes=None) -> None:
     create_compliance_check(
-        session, instrument_id=instrument_id, status="halal", source="manual",
+        session, instrument_id=instrument_id, status="COMPLIANT", source="manual",
         checked_at=now - timedelta(days=1), expires_at=now + timedelta(days=90),
         created_by=None, evidence_url="https://example.com", notes=notes,
     )

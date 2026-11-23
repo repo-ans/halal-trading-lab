@@ -108,7 +108,7 @@ def test_paper_run_route_is_rate_limited(db_conn, monkeypatch):
                              open=Decimal(c), high=Decimal(c), low=Decimal(c), close=Decimal(c),
                              volume=100, source="manual"))
     create_compliance_check(
-        db_conn, instrument_id=inst.id, status="halal", source="manual",
+        db_conn, instrument_id=inst.id, status="COMPLIANT", source="manual",
         checked_at=T0 - timedelta(days=1), expires_at=T0 + timedelta(days=90),
         created_by=None, evidence_url="https://example.com",
     )

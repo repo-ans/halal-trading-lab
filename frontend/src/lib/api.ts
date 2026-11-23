@@ -9,6 +9,8 @@ import type {
   Metrics,
   PaperOrdersPage,
   PaperRunResult,
+  ReplayFill,
+  ReplayState,
   StrategyRun,
   StrategyRunListResult,
   WatchlistRow,
@@ -184,6 +186,24 @@ export function postCompliance(input: ComplianceInput, token: string): Promise<u
   return postJson("/compliance", input, token);
 }
 
+// A SUGGESTION only (admin-only route) -- never writes anything itself. The
+// caller still fills in real evidence and submits through postCompliance
+// above. is_sandbox=true means Zoya's own randomized dummy data, never a
+// real ruling -- the UI must say so, not just the API.
+export interface ZoyaLookupResult {
+  available: boolean;
+  is_sandbox: boolean;
+  status: ComplianceStatus | null;
+  purification_ratio: number | null;
+  report_date: string | null;
+  zoya_name: string | null;
+  zoya_exchange: string | null;
+}
+
+export function fetchZoyaLookup(instrumentId: number, token: string): Promise<ZoyaLookupResult> {
+  return apiFetch<ZoyaLookupResult>(`/compliance/zoya-lookup?instrument_id=${instrumentId}`, token);
+}
+
 export function postCsvDryRun(file: File, token: string): Promise<CsvImportResult> {
   return postFile<CsvImportResult>("/compliance/csv/dry-run", file, token);
 }
@@ -265,6 +285,46 @@ export async function fetchAiSummary(
   if (res.status === 404) return null;
   if (!res.ok) throw await _errorFor(res);
   return (await res.json()) as AiSummary;
+}
+
+// --- Replay Trading: manual Buy/Sell against a replaying chart ---
+
+export interface ReplaySessionInput {
+  instrument_id: number;
+  session_day: string; // YYYY-MM-DD
+  starting_cash?: string;
+  max_position_value?: string;
+  commission_per_order?: string;
+  spread_bps?: string;
+  slippage_bps?: string;
+}
+
+export function createReplaySession(input: ReplaySessionInput, token: string): Promise<ReplayState> {
+  return postJson("/replay-sessions", input, token);
+}
+
+export function fetchReplaySessionState(sessionId: number, token: string): Promise<ReplayState> {
+  return apiFetch<ReplayState>(`/replay-sessions/${sessionId}`, token);
+}
+
+export function fetchReplayFills(sessionId: number, token: string): Promise<ReplayFill[]> {
+  return apiFetch<ReplayFill[]>(`/replay-sessions/${sessionId}/fills`, token);
+}
+
+// clickedBarTs: ISO-8601 with an explicit offset -- the bar the user was
+// looking at when they clicked. The backend fills at the NEXT bar's open in
+// the same session, never this bar's own close (no-look-ahead, CLAUDE.md
+// section 7) -- there is no "side: reverse"; long-only means closing a
+// position is simply "sell".
+export function postReplayOrder(
+  sessionId: number, side: "buy" | "sell", clickedBarTs: string, token: string,
+): Promise<ReplayState> {
+  return postJson<ReplayState>(
+    `/replay-sessions/${sessionId}/orders`, { side, clicked_bar_ts: clickedBarTs }, token);
+}
+
+export function endReplaySession(sessionId: number, token: string): Promise<ReplayState> {
+  return postJson<ReplayState>(`/replay-sessions/${sessionId}/end`, {}, token);
 }
 
 // Authenticated file download: a plain <a href> can't carry a bearer token, so

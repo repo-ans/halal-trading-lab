@@ -23,7 +23,7 @@ export interface Bar {
   source: string;
 }
 
-export type ComplianceStatus = "halal" | "not_halal" | "doubtful" | "not_covered";
+export type ComplianceStatus = "COMPLIANT" | "NON_COMPLIANT" | "QUESTIONABLE" | "UNRATED";
 export type BlockingReason = ComplianceStatus | "no_record" | "expired";
 
 // Matches backend/app/routes/watchlist.py's WatchlistRow exactly. The app never
@@ -147,4 +147,44 @@ export interface CsvRowResult {
 export interface CsvImportResult {
   rows: CsvRowResult[];
   all_accepted: boolean;
+}
+
+// Matches backend/app/routes/replay.py's ReplaySessionOut/ReplayStateOut/
+// ReplayFillOut exactly. Replay Trading: a human clicking Buy/Sell against a
+// replaying chart, with a live dummy balance -- separate from StrategyRun
+// (that's the automated 5/20 MA backtest). Long-only: there is no "Reverse" --
+// closing a position is simply a Sell.
+export interface ReplaySessionConfig {
+  id: number;
+  instrument_id: number;
+  session_day: string; // YYYY-MM-DD
+  starting_cash: string;
+  max_position_value: string;
+  commission_per_order: string;
+  spread_bps: string;
+  slippage_bps: string;
+  status: "active" | "completed";
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface ReplayState {
+  session: ReplaySessionConfig;
+  position_qty: string;
+  position_entry_price: string | null; // null means flat
+  cash_balance: string;
+}
+
+export interface ReplayFill {
+  id: number;
+  origin: "manual" | "eod_exit";
+  side: "buy" | "sell";
+  fill_ts: string;
+  fill_price: string;
+  qty: string;
+  commission: string;
+  spread_cost: string;
+  slippage_cost: string;
+  cash_balance_after: string;
+  realized_pnl: string | null; // only set on a 'sell' fill
 }

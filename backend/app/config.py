@@ -73,6 +73,17 @@ class Settings(BaseSettings):
     # per rolling 24h -- see app/services/ai_summary.py.
     ai_summary_daily_cap: int = 5
 
+    # CLAUDE.md section 4/5: Zoya's GraphQL API, sandbox access obtained
+    # 2026-11-23 (no live key yet). SecretStr for the same reason as AI_API_KEY.
+    # Empty disables the lookup route outright (503), same fail-closed shape.
+    zoya_api_key: SecretStr = SecretStr("")
+    # Defaults to the SANDBOX endpoint on purpose -- there is no live key yet,
+    # and sandbox returns randomized dummy data per Zoya's own docs. Never
+    # treat a sandbox-sourced result as a real ruling; the lookup route always
+    # labels results from a URL containing "sandbox" accordingly.
+    zoya_api_url: str = "https://sandbox-api.zoya.finance/graphql"
+    zoya_timeout_seconds: float = 10.0
+
     @field_validator("test_database_url", mode="before")
     @classmethod
     def _empty_means_use_the_default(cls, v: str) -> str:

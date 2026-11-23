@@ -4,7 +4,8 @@ from app.models.compliance import ComplianceCheck
 from app.models.instrument import Instrument
 from app.models.paper import PaperFill, PaperOrder
 from app.models.price_bar import PriceBar
+from app.models.replay import ReplayFill, ReplaySession
 from app.models.strategy import Signal, StrategyRun
 
 __all__ = ["Base", "Instrument", "ComplianceCheck", "PriceBar", "StrategyRun",
-           "Signal", "PaperOrder", "PaperFill", "AiReport"]
+           "Signal", "PaperOrder", "PaperFill", "AiReport", "ReplaySession", "ReplayFill"]

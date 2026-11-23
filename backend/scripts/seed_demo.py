@@ -65,32 +65,32 @@ def build_fixture_specs(now: datetime) -> dict[str, dict]:
     return {
         "DEMO-OK": {
             "name": "Demo Fixture OK (not a real company)", "source_symbol": "AAPL",
-            "status": "halal", "checked_at": now - timedelta(days=1),
+            "status": "COMPLIANT", "checked_at": now - timedelta(days=1),
             "expires_at": now + timedelta(days=90),
         },
         "DEMO-SOON": {
             "name": "Demo Fixture Soon-Expiring (not a real company)", "source_symbol": "MSFT",
-            "status": "halal", "checked_at": now - timedelta(days=80),
+            "status": "COMPLIANT", "checked_at": now - timedelta(days=80),
             "expires_at": now + timedelta(days=10),  # within the 14-day amber threshold
         },
         "DEMO-EXPIRED": {
             "name": "Demo Fixture Expired (not a real company)", "source_symbol": "KO",
-            "status": "halal", "checked_at": now - timedelta(days=100),
+            "status": "COMPLIANT", "checked_at": now - timedelta(days=100),
             "expires_at": now - timedelta(days=10),
         },
         "DEMO-NOTHALAL": {
             "name": "Demo Fixture Not-Halal (not a real company)", "source_symbol": "RY",
-            "status": "not_halal", "checked_at": now - timedelta(days=1),
+            "status": "NON_COMPLIANT", "checked_at": now - timedelta(days=1),
             "expires_at": now + timedelta(days=90),
         },
         "DEMO-DOUBTFUL": {
             "name": "Demo Fixture Doubtful (not a real company)", "source_symbol": "AAPL",
-            "status": "doubtful", "checked_at": now - timedelta(days=1),
+            "status": "QUESTIONABLE", "checked_at": now - timedelta(days=1),
             "expires_at": now + timedelta(days=90),
         },
         "DEMO-NOCOVER": {
             "name": "Demo Fixture Not-Covered (not a real company)", "source_symbol": "MSFT",
-            "status": "not_covered", "checked_at": now - timedelta(days=1),
+            "status": "UNRATED", "checked_at": now - timedelta(days=1),
             "expires_at": now + timedelta(days=90),
         },
     }

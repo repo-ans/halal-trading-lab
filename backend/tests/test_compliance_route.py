@@ -6,12 +6,14 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from app.auth import AuthUser, current_user
 from app.config import get_settings
 from app.db import get_session
 from app.main import app
 from app.models.instrument import Instrument
+from app.providers.compliance.zoya import ZoyaApiError, ZoyaReport
 from tests.conftest import run_db_tests
 
 client = TestClient(app)
@@ -72,7 +74,7 @@ def test_non_admin_gets_403(non_admin):
     non_admin.commit()
 
     resp = client.post("/compliance", json={
-        "instrument_id": inst.id, "status": "halal", "source": "manual",
+        "instrument_id": inst.id, "status": "COMPLIANT", "source": "manual",
         "evidence_url": "https://example.com", "checked_at": NOW.isoformat(),
     })
 
@@ -91,7 +93,7 @@ def test_admin_user_ids_unset_means_nobody_is_admin(db_conn, monkeypatch):
     db_conn.commit()
 
     resp = client.post("/compliance", json={
-        "instrument_id": inst.id, "status": "halal", "source": "manual",
+        "instrument_id": inst.id, "status": "COMPLIANT", "source": "manual",
         "evidence_url": "https://example.com", "checked_at": NOW.isoformat(),
     })
 
@@ -105,13 +107,13 @@ def test_admin_can_create(admin):
 
     checked_at = PAST_CHECKED_AT
     resp = client.post("/compliance", json={
-        "instrument_id": inst.id, "status": "halal", "source": "manual",
+        "instrument_id": inst.id, "status": "COMPLIANT", "source": "manual",
         "evidence_url": "https://example.com", "checked_at": checked_at,
     })
 
     assert resp.status_code == 201
     body = resp.json()
-    assert body["status"] == "halal"
+    assert body["status"] == "COMPLIANT"
     assert body["is_current"] is True
     # default expiry applied (COMPLIANCE_DEFAULT_VALIDITY_DAYS, default 90)
     expires = datetime.fromisoformat(body["expires_at"])
@@ -127,7 +129,7 @@ def test_create_rejects_evidence_url_with_no_host(admin):
     admin.commit()
 
     resp = client.post("/compliance", json={
-        "instrument_id": inst.id, "status": "halal", "source": "manual",
+        "instrument_id": inst.id, "status": "COMPLIANT", "source": "manual",
         "evidence_url": "https:", "checked_at": PAST_CHECKED_AT,
     })
 
@@ -159,7 +161,7 @@ def test_conflict_returns_409_not_500(admin, monkeypatch):
     admin.commit()
 
     resp = client.post("/compliance", json={
-        "instrument_id": inst.id, "status": "halal", "source": "manual",
+        "instrument_id": inst.id, "status": "COMPLIANT", "source": "manual",
         "evidence_url": "https://example.com", "checked_at": PAST_CHECKED_AT,
     })
 
@@ -173,7 +175,7 @@ def test_csv_dry_run_then_confirm_end_to_end(admin):
     inst = _make_instrument(admin, symbol="ZCSVROUTE")
     admin.commit()
     csv_bytes = (
-        HEADER + "\nZCSVROUTE,XNAS,halal,manual,https://example.com,2026-11-01,,"
+        HEADER + "\nZCSVROUTE,XNAS,COMPLIANT,manual,https://example.com,2026-11-01,,"
     ).encode("utf-8")
 
     dry = client.post("/compliance/csv/dry-run",
@@ -188,7 +190,7 @@ def test_csv_dry_run_then_confirm_end_to_end(admin):
 
     watch = client.get("/watchlist")
     row = next(r for r in watch.json() if r["symbol"] == "ZCSVROUTE")
-    assert row["status"] == "halal"
+    assert row["status"] == "COMPLIANT"
 
 
 @run_db_tests
@@ -197,8 +199,8 @@ def test_csv_confirm_rejects_whole_batch_if_any_row_invalid(admin):
     admin.commit()
     csv_bytes = (
         HEADER + "\n"
-        "ZCSVOK,XNAS,halal,manual,https://example.com,2026-11-01,,\n"
-        "ZCSVGHOST,XNAS,halal,manual,https://example.com,2026-11-01,,"
+        "ZCSVOK,XNAS,COMPLIANT,manual,https://example.com,2026-11-01,,\n"
+        "ZCSVGHOST,XNAS,COMPLIANT,manual,https://example.com,2026-11-01,,"
     ).encode("utf-8")
 
     confirm = client.post("/compliance/csv/confirm",
@@ -212,7 +214,108 @@ def test_csv_confirm_rejects_whole_batch_if_any_row_invalid(admin):
 
 @run_db_tests
 def test_csv_non_admin_gets_403(non_admin):
-    csv_bytes = (HEADER + "\nZX,XNAS,halal,manual,https://example.com,2026-11-01,,").encode()
+    csv_bytes = (HEADER + "\nZX,XNAS,COMPLIANT,manual,https://example.com,2026-11-01,,").encode()
     resp = client.post("/compliance/csv/dry-run",
                        files={"file": ("import.csv", csv_bytes, "text/csv")})
     assert resp.status_code == 403
+
+
+# --- GET /compliance/zoya-lookup: a SUGGESTION only, never a write ---
+
+@run_db_tests
+def test_zoya_lookup_non_admin_gets_403(non_admin):
+    inst = _make_instrument(non_admin, symbol="ZZOYA1")
+    non_admin.commit()
+    resp = client.get("/compliance/zoya-lookup", params={"instrument_id": inst.id})
+    assert resp.status_code == 403
+
+
+@run_db_tests
+def test_zoya_lookup_503_when_key_unset(admin, monkeypatch):
+    monkeypatch.setattr(get_settings(), "zoya_api_key", SecretStr(""))
+    inst = _make_instrument(admin, symbol="ZZOYA2")
+    admin.commit()
+    resp = client.get("/compliance/zoya-lookup", params={"instrument_id": inst.id})
+    assert resp.status_code == 503
+
+
+@run_db_tests
+def test_zoya_lookup_404_unknown_instrument(admin, monkeypatch):
+    monkeypatch.setattr(get_settings(), "zoya_api_key", SecretStr("k"))
+    resp = client.get("/compliance/zoya-lookup", params={"instrument_id": 999999})
+    assert resp.status_code == 404
+
+
+def _fake_provider(*, is_sandbox: bool, report):
+    class _FakeProvider:
+        def __init__(self, **kwargs):
+            pass
+
+        def get_report(self, symbol):
+            if isinstance(report, Exception):
+                raise report
+            return report
+    _FakeProvider.is_sandbox = is_sandbox
+    return _FakeProvider
+
+
+@run_db_tests
+def test_zoya_lookup_success_returns_mapped_fields(admin, monkeypatch):
+    import app.routes.compliance as compliance_routes
+
+    monkeypatch.setattr(get_settings(), "zoya_api_key", SecretStr("k"))
+    report = ZoyaReport(symbol="ZZOYA3", name="Apple Inc", exchange="XNGS",
+                        status="COMPLIANT", purification_ratio=0.0,
+                        report_date=datetime(2026, 2, 18, tzinfo=timezone.utc))
+    monkeypatch.setattr(compliance_routes, "ZoyaProvider",
+                        _fake_provider(is_sandbox=True, report=report))
+
+    inst = _make_instrument(admin, symbol="ZZOYA3")
+    admin.commit()
+    resp = client.get("/compliance/zoya-lookup", params={"instrument_id": inst.id})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["available"] is True
+    assert body["is_sandbox"] is True
+    assert body["status"] == "COMPLIANT"
+    assert body["zoya_name"] == "Apple Inc"
+    assert body["zoya_exchange"] == "XNGS"
+
+
+@run_db_tests
+def test_zoya_lookup_no_coverage_returns_available_false(admin, monkeypatch):
+    import app.routes.compliance as compliance_routes
+
+    monkeypatch.setattr(get_settings(), "zoya_api_key", SecretStr("k"))
+    monkeypatch.setattr(compliance_routes, "ZoyaProvider",
+                        _fake_provider(is_sandbox=False, report=None))
+
+    inst = _make_instrument(admin, symbol="ZZOYA4")
+    admin.commit()
+    resp = client.get("/compliance/zoya-lookup", params={"instrument_id": inst.id})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["available"] is False
+    assert body["is_sandbox"] is False
+    assert body["status"] is None
+
+
+@run_db_tests
+def test_zoya_lookup_api_error_returns_502_not_the_raw_exception_text(admin, monkeypatch):
+    import app.routes.compliance as compliance_routes
+
+    monkeypatch.setattr(get_settings(), "zoya_api_key", SecretStr("k"))
+    monkeypatch.setattr(
+        compliance_routes, "ZoyaProvider",
+        _fake_provider(is_sandbox=True,
+                       report=ZoyaApiError("some internal detail that should never reach the client")),
+    )
+
+    inst = _make_instrument(admin, symbol="ZZOYA5")
+    admin.commit()
+    resp = client.get("/compliance/zoya-lookup", params={"instrument_id": inst.id})
+
+    assert resp.status_code == 502
+    assert "some internal detail" not in resp.text

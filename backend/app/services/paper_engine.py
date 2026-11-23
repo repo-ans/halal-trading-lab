@@ -43,10 +43,10 @@ from app.models.instrument import Instrument
 from app.models.paper import PaperFill, PaperOrder
 from app.models.price_bar import SUPPORTED_INTERVAL, PriceBar
 from app.models.strategy import Signal, StrategyRun
+from app.services.cost_model import adverse_fill_price as _adverse_fill_price
+from app.services.cost_model import cost_breakdown as _cost_breakdown
 from app.services.money import quantize_money
 from app.services.strategy import _session_schedule  # reused -- same calendar/session logic as Stage D
-
-_BPS = Decimal(10000)
 
 
 class StrategyRunNotFound(Exception):
@@ -110,23 +110,6 @@ def _session_last_bars(calendar: str, range_start: datetime, range_end: datetime
                        interval_minutes: int = 5) -> list[datetime]:
     sessions = _session_schedule(calendar, range_start.date(), range_end.date(), interval_minutes)
     return [s[-1] for s in sessions if range_start <= s[-1] < range_end]
-
-
-def _adverse_fill_price(raw_open: Decimal, spread_bps: Decimal, slippage_bps: Decimal, side: str) -> Decimal:
-    adjustment = spread_bps / 2 + slippage_bps
-    if side == "buy":
-        return quantize_money(raw_open * (1 + adjustment / _BPS))
-    return quantize_money(raw_open * (1 - adjustment / _BPS))
-
-
-def _cost_breakdown(raw_open: Decimal, spread_bps: Decimal, slippage_bps: Decimal,
-                    qty: Decimal) -> tuple[Decimal, Decimal]:
-    """spread_cost, slippage_cost -- reporting-only breakdowns, independently
-    rounded. Never added to the cash check or the cash movement (see module
-    docstring) -- that's entirely driven by fill_price, computed separately."""
-    spread_cost = quantize_money(raw_open * (spread_bps / 2 / _BPS) * qty)
-    slippage_cost = quantize_money(raw_open * (slippage_bps / _BPS) * qty)
-    return spread_cost, slippage_cost
 
 
 def _rejected(instrument_id, signal_id, origin, side, qty, intended_price, execution_ts, reason) -> OrderResult:

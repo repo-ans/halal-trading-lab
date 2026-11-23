@@ -11,7 +11,7 @@ from app.models.base import Base, UTCDateTime, pk_column
 class ComplianceCheck(Base):
     __tablename__ = "compliance_checks"
     __table_args__ = (
-        CheckConstraint("status IN ('halal','not_halal','doubtful','not_covered')",
+        CheckConstraint("status IN ('COMPLIANT','NON_COMPLIANT','QUESTIONABLE','UNRATED')",
                         name="ck_compliance_status"),
         CheckConstraint("source IN ('manual','zoya','musaffa')", name="ck_compliance_source"),
         CheckConstraint("expires_at > checked_at", name="ck_compliance_expiry_after_check"),

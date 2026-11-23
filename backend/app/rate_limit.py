@@ -51,3 +51,10 @@ class SlidingWindowLimiter:
 # hammering one of them shouldn't eat into their budget for the other.
 STRATEGY_RUN_LIMITER = SlidingWindowLimiter(max_requests=10, window=timedelta(seconds=60))
 PAPER_RUN_LIMITER = SlidingWindowLimiter(max_requests=10, window=timedelta(seconds=60))
+# Replay Trading (2026-11-23): session creation is DB/compute-light but still
+# gets the same shape of cap as a strategy run. Order placement is a human
+# clicking Buy/Sell while watching a chart replay at some playback speed, so it
+# allows more requests per window than the above -- still enough to stop a
+# scripted loop, not enough to interfere with fast manual clicking.
+REPLAY_SESSION_LIMITER = SlidingWindowLimiter(max_requests=10, window=timedelta(seconds=60))
+REPLAY_ORDER_LIMITER = SlidingWindowLimiter(max_requests=60, window=timedelta(seconds=60))

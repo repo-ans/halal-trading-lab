@@ -63,10 +63,10 @@ def test_no_compliance_record_shows_no_record(authed):
 
 
 @run_db_tests
-def test_halal_and_valid_shows_null_blocking_reason(authed):
+def test_compliant_and_valid_shows_null_blocking_reason(authed):
     inst = _make_instrument(authed)
     create_compliance_check(
-        authed, instrument_id=inst.id, status="halal", source="manual",
+        authed, instrument_id=inst.id, status="COMPLIANT", source="manual",
         checked_at=NOW - timedelta(days=10), expires_at=NOW + timedelta(days=80),
         created_by=None, evidence_url="https://example.com",
     )
@@ -74,7 +74,7 @@ def test_halal_and_valid_shows_null_blocking_reason(authed):
 
     row = next(r for r in client.get("/watchlist").json() if r["symbol"] == "ZWATCH")
 
-    assert row["status"] == "halal"
+    assert row["status"] == "COMPLIANT"
     assert row["blocking_reason"] is None
     assert row["days_until_expiry"] is not None
     assert row["days_until_expiry"] > 0
@@ -84,7 +84,7 @@ def test_halal_and_valid_shows_null_blocking_reason(authed):
 def test_expired_shows_expired_blocking_reason(authed):
     inst = _make_instrument(authed)
     create_compliance_check(
-        authed, instrument_id=inst.id, status="halal", source="manual",
+        authed, instrument_id=inst.id, status="COMPLIANT", source="manual",
         checked_at=NOW - timedelta(days=100), expires_at=NOW - timedelta(days=1),
         created_by=None, evidence_url="https://example.com",
     )
@@ -92,15 +92,15 @@ def test_expired_shows_expired_blocking_reason(authed):
 
     row = next(r for r in client.get("/watchlist").json() if r["symbol"] == "ZWATCH")
 
-    assert row["status"] == "halal"  # the record's own status is still shown
+    assert row["status"] == "COMPLIANT"  # the record's own status is still shown
     assert row["blocking_reason"] == "expired"
 
 
 @run_db_tests
-def test_not_halal_shows_not_halal_blocking_reason(authed):
+def test_non_compliant_shows_non_compliant_blocking_reason(authed):
     inst = _make_instrument(authed)
     create_compliance_check(
-        authed, instrument_id=inst.id, status="not_halal", source="manual",
+        authed, instrument_id=inst.id, status="NON_COMPLIANT", source="manual",
         checked_at=NOW - timedelta(days=1), expires_at=NOW + timedelta(days=89),
         created_by=None,
     )
@@ -108,8 +108,8 @@ def test_not_halal_shows_not_halal_blocking_reason(authed):
 
     row = next(r for r in client.get("/watchlist").json() if r["symbol"] == "ZWATCH")
 
-    assert row["status"] == "not_halal"
-    assert row["blocking_reason"] == "not_halal"
+    assert row["status"] == "NON_COMPLIANT"
+    assert row["blocking_reason"] == "NON_COMPLIANT"
 
 
 @run_db_tests

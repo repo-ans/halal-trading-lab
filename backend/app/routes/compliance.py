@@ -10,6 +10,7 @@ from app.auth import AuthUser, require_admin
 from app.config import get_settings
 from app.db import get_session
 from app.models.instrument import Instrument
+from app.providers.compliance.zoya import ZoyaApiError, ZoyaProvider
 from app.services.compliance import (
     ComplianceConflict,
     create_compliance_check,
@@ -20,7 +21,7 @@ from app.services.compliance_csv import RowResult, parse_and_validate_csv
 
 router = APIRouter(prefix="/compliance")
 
-VALID_STATUSES = ("halal", "not_halal", "doubtful", "not_covered")
+VALID_STATUSES = ("COMPLIANT", "NON_COMPLIANT", "QUESTIONABLE", "UNRATED")
 VALID_SOURCES = ("manual", "zoya", "musaffa")
 
 
@@ -156,3 +157,57 @@ async def csv_confirm(
             "a concurrent compliance update conflicted with this import; nothing was applied")
 
     return {"applied": len(result.rows)}
+
+
+class ZoyaLookupOut(BaseModel):
+    available: bool  # False means Zoya has no coverage for this symbol
+    is_sandbox: bool  # True means randomized dummy data -- never a real ruling
+    status: str | None = None
+    purification_ratio: float | None = None
+    report_date: datetime | None = None
+    zoya_name: str | None = None
+    zoya_exchange: str | None = None
+
+
+@router.get("/zoya-lookup", response_model=ZoyaLookupOut)
+def zoya_lookup(
+    instrument_id: int,
+    user: AuthUser = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ZoyaLookupOut:
+    """A SUGGESTION only -- never writes anything. CLAUDE.md section 5: a human
+    still reviews this, supplies real evidence, and submits through the
+    existing POST /compliance (or CSV import) to actually create a record."""
+    instrument = session.get(Instrument, instrument_id)
+    if instrument is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "instrument not found")
+
+    settings = get_settings()
+    api_key = settings.zoya_api_key.get_secret_value()
+    if not api_key:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "Zoya lookup is not configured (ZOYA_API_KEY is empty)")
+
+    provider = ZoyaProvider(
+        api_key=api_key, api_url=settings.zoya_api_url,
+        timeout_seconds=settings.zoya_timeout_seconds,
+        default_validity_days=settings.compliance_default_validity_days,
+    )
+    try:
+        report = provider.get_report(instrument.symbol)
+    except ZoyaApiError:
+        # Never surface the SDK/HTTP exception's own text (CLAUDE.md's secret
+        # -handling convention, applied here too even though there's no secret
+        # in this particular exception -- a consistent habit beats remembering
+        # which exceptions are "safe" to echo).
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                            "Zoya API request failed -- try again shortly")
+
+    if report is None:
+        return ZoyaLookupOut(available=False, is_sandbox=provider.is_sandbox)
+
+    return ZoyaLookupOut(
+        available=True, is_sandbox=provider.is_sandbox, status=report.status,
+        purification_ratio=report.purification_ratio, report_date=report.report_date,
+        zoya_name=report.name, zoya_exchange=report.exchange,
+    )

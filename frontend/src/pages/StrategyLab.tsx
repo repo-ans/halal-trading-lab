@@ -18,9 +18,9 @@ interface StrategyLabProps {
 // rejection_messages.py's paper-order reasons), so this is the one source.
 const BLOCK_REASON_LABELS: Record<string, string> = {
   no_record: "no halal record yet",
-  not_halal: "marked not halal",
-  doubtful: "marked doubtful",
-  not_covered: "not covered by halal screening",
+  NON_COMPLIANT: "marked not halal",
+  QUESTIONABLE: "marked doubtful",
+  UNRATED: "not covered by halal screening",
   expired: "halal record has expired",
   licence_restricted: "price data not yet licensed for display",
 };

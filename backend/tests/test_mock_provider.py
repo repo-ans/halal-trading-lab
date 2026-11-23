@@ -48,5 +48,5 @@ def test_failure_raises():
 
 def test_compliance_fixtures():
     c = MockComplianceProvider()
-    assert c.get_record("MOCKA").status == "halal"
+    assert c.get_record("MOCKA").status == "COMPLIANT"
     assert c.get_record("NOPE") is None

@@ -13,10 +13,10 @@ from sqlalchemy.orm import Session
 
 from app.models.compliance import ComplianceCheck
 
-# UNCONFIRMED ASSUMPTION (CLAUDE.md section 5): doubtful and not_covered block
-# trading, exactly like not_halal. The owner has not explicitly confirmed this --
-# flagged here and in CLAUDE.md.
-BLOCKED_STATUSES = ("not_halal", "doubtful", "not_covered")
+# UNCONFIRMED ASSUMPTION (CLAUDE.md section 5): QUESTIONABLE and UNRATED block
+# trading, exactly like NON_COMPLIANT. The owner has not explicitly confirmed
+# this -- flagged here and in CLAUDE.md.
+BLOCKED_STATUSES = ("NON_COMPLIANT", "QUESTIONABLE", "UNRATED")
 
 REASON_NO_RECORD = "no_record"
 REASON_EXPIRED = "expired"
@@ -24,8 +24,8 @@ OK = "ok"
 
 
 class ComplianceBlocked(Exception):
-    """Raised by assert_tradable. reason is one of: no_record, not_halal, doubtful,
-    not_covered, expired."""
+    """Raised by assert_tradable. reason is one of: no_record, NON_COMPLIANT,
+    QUESTIONABLE, UNRATED, expired."""
 
     def __init__(self, reason: str):
         self.reason = reason
@@ -39,14 +39,15 @@ class ComplianceConflict(Exception):
 
 
 def effective_status(check: ComplianceCheck | None, now: datetime) -> str:
-    """"ok" if tradable, else the reason it's blocked. Only status == 'halal' AND
-    now < expires_at passes -- expiry is only relevant for an otherwise-halal
-    record; a blocked status is blocked regardless of whether it's also expired."""
+    """"ok" if tradable, else the reason it's blocked. Only status == 'COMPLIANT'
+    AND now < expires_at passes -- expiry is only relevant for an otherwise
+    -compliant record; a blocked status is blocked regardless of whether it's
+    also expired."""
     if check is None:
         return REASON_NO_RECORD
     if check.status in BLOCKED_STATUSES:
         return check.status
-    # The only remaining possibility per the DB CHECK constraint is status=='halal'.
+    # The only remaining possibility per the DB CHECK constraint is status=='COMPLIANT'.
     if now >= check.expires_at:
         return REASON_EXPIRED
     return OK
@@ -71,7 +72,7 @@ def assert_tradable(session: Session, instrument_id: int, now: datetime) -> int:
     status = effective_status(check, now)
     if status != OK:
         raise ComplianceBlocked(status)
-    assert check is not None  # OK implies a halal, unexpired check exists
+    assert check is not None  # OK implies a COMPLIANT, unexpired check exists
     return check.id
 
 
@@ -111,8 +112,8 @@ def validate_new_check(
         return "checked_at must not be in the future"
     if expires_at <= checked_at:
         return "expires_at must be after checked_at"
-    if status == "halal" and not (evidence_url or evidence_file_path):
-        return "status 'halal' requires evidence_url or an evidence file"
+    if status == "COMPLIANT" and not (evidence_url or evidence_file_path):
+        return "status 'COMPLIANT' requires evidence_url or an evidence file"
     url_error = validate_evidence_url(evidence_url)
     if url_error is not None:
         return url_error

@@ -10,6 +10,7 @@ import { useTheme } from "./lib/theme";
 import Dashboard from "./pages/Dashboard";
 import InstrumentChart from "./pages/InstrumentChart";
 import Login from "./pages/Login";
+import ReplayTrading from "./pages/ReplayTrading";
 import StrategyLab from "./pages/StrategyLab";
 import VirtualTrades from "./pages/VirtualTrades";
 import Watchlist from "./pages/Watchlist";
@@ -17,7 +18,7 @@ import type { Instrument } from "./types";
 
 // No router (Stage B2 decision, still true): a plain tab switch, same as how
 // Watchlist/InstrumentChart already toggle via local state.
-type Screen = "watchlist" | "strategy-lab" | "virtual-trades" | "dashboard";
+type Screen = "watchlist" | "strategy-lab" | "virtual-trades" | "dashboard" | "replay-trading";
 
 function Home({ session, theme, onToggleTheme }: {
   session: Session; theme: ReturnType<typeof useTheme>[0]; onToggleTheme: () => void;
@@ -49,6 +50,7 @@ function Home({ session, theme, onToggleTheme }: {
             {([
               ["watchlist", "Watchlist"],
               ["strategy-lab", "Strategy Lab"],
+              ["replay-trading", "Replay Trading"],
               ["virtual-trades", "Virtual Trades"],
               ["dashboard", "Dashboard"],
             ] as const).map(([key, label]) => (
@@ -94,6 +96,8 @@ function Home({ session, theme, onToggleTheme }: {
           }}
           onGoToWatchlist={() => goToScreen("watchlist")}
         />
+      ) : screen === "replay-trading" ? (
+        <ReplayTrading session={session} />
       ) : screen === "virtual-trades" ? (
         <VirtualTrades session={session} runId={activeRunId} onSelectRun={setActiveRunId} />
       ) : (

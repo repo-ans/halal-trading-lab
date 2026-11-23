@@ -27,7 +27,7 @@ def _make_instrument(db_conn, symbol="ZCOMP") -> Instrument:
     return inst
 
 
-def _make_check(db_conn, instrument_id, status="halal", checked_at=None, expires_at=None):
+def _make_check(db_conn, instrument_id, status="COMPLIANT", checked_at=None, expires_at=None):
     check = create_compliance_check(
         db_conn, instrument_id=instrument_id, status=status, source="manual",
         checked_at=checked_at or NOW - timedelta(days=5),
@@ -58,7 +58,7 @@ def test_update_of_non_is_current_column_is_rejected_by_trigger(db_conn):
 
     with pytest.raises(sa.exc.DBAPIError, match="append-only"):
         db_conn.execute(
-            sa.text("UPDATE compliance_checks SET status='not_halal' WHERE id=:id"),
+            sa.text("UPDATE compliance_checks SET status='NON_COMPLIANT' WHERE id=:id"),
             {"id": check.id})
         db_conn.commit()
     db_conn.rollback()
@@ -84,9 +84,9 @@ def test_is_current_only_update_is_allowed(db_conn):
 @run_db_tests
 def test_flip_replaces_current_and_keeps_history(db_conn):
     inst = _make_instrument(db_conn)
-    first = _make_check(db_conn, inst.id, status="halal")
+    first = _make_check(db_conn, inst.id, status="COMPLIANT")
     second = create_compliance_check(
-        db_conn, instrument_id=inst.id, status="not_halal", source="manual",
+        db_conn, instrument_id=inst.id, status="NON_COMPLIANT", source="manual",
         checked_at=NOW, expires_at=NOW + timedelta(days=90), created_by=None,
     )
     db_conn.commit()
@@ -115,7 +115,7 @@ def test_unique_index_rejects_two_current_rows_for_same_instrument(db_conn):
         db_conn.execute(sa.text("""
             INSERT INTO compliance_checks
                 (instrument_id, status, source, checked_at, expires_at, is_current)
-            VALUES (:iid, 'not_halal', 'manual', :checked, :expires, true)
+            VALUES (:iid, 'NON_COMPLIANT', 'manual', :checked, :expires, true)
         """), {"iid": inst.id, "checked": NOW, "expires": NOW + timedelta(days=90)})
         db_conn.commit()
     db_conn.rollback()
@@ -137,7 +137,7 @@ def test_flush_integrity_error_becomes_compliance_conflict_not_500(db_conn, monk
 
     with pytest.raises(ComplianceConflict):
         create_compliance_check(
-            db_conn, instrument_id=inst.id, status="halal", source="manual",
+            db_conn, instrument_id=inst.id, status="COMPLIANT", source="manual",
             checked_at=NOW, expires_at=NOW + timedelta(days=90), created_by=None,
             evidence_url="https://example.com/doc",
         )
@@ -148,7 +148,7 @@ def test_flush_integrity_error_becomes_compliance_conflict_not_500(db_conn, monk
 @run_db_tests
 def test_assert_tradable_passes_and_returns_check_id(db_conn):
     inst = _make_instrument(db_conn)
-    check = _make_check(db_conn, inst.id, status="halal")
+    check = _make_check(db_conn, inst.id, status="COMPLIANT")
 
     assert assert_tradable(db_conn, inst.id, NOW) == check.id
 
@@ -166,7 +166,7 @@ def test_assert_tradable_raises_for_no_record(db_conn):
 @run_db_tests
 def test_assert_tradable_raises_for_expired(db_conn):
     inst = _make_instrument(db_conn)
-    _make_check(db_conn, inst.id, status="halal",
+    _make_check(db_conn, inst.id, status="COMPLIANT",
                checked_at=NOW - timedelta(days=100), expires_at=NOW - timedelta(days=1))
 
     with pytest.raises(ComplianceBlocked) as exc_info:

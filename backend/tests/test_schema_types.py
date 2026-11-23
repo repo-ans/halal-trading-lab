@@ -2,6 +2,7 @@
 Checks both the ORM models and the SQL the migration actually emits (offline, no DB)."""
 import io
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -11,11 +12,15 @@ from alembic.config import Config
 
 from app.models import Base
 
+# Grew to 10 with Replay Trading (migration 0008, 2026-11-23) -- CLAUDE.md
+# section 6 updated to match; the name EXPECTED_TABLES kept as-is rather than
+# renumbered, since it's just a set of names, not a claim about the count.
 EXPECTED_TABLES = {"instruments", "compliance_checks", "price_bars", "strategy_runs",
-                   "signals", "paper_orders", "paper_fills", "ai_reports"}
+                   "signals", "paper_orders", "paper_fills", "ai_reports",
+                   "replay_sessions", "replay_fills"}
 
 
-def test_eight_tables():
+def test_ten_tables():
     assert set(Base.metadata.tables) == EXPECTED_TABLES
 
 
@@ -39,7 +44,11 @@ def test_migration_sql():
     assert "NUMERIC(18, 4)" in sql
     assert "TIMESTAMP WITH TIME ZONE" in sql
     assert "TIMESTAMP WITHOUT TIME ZONE" not in sql
-    assert "FLOAT" not in sql and "DOUBLE" not in sql and "REAL" not in sql
+    # Word-boundary, not plain substring -- replay_fills.realized_pnl's column
+    # name contains "REAL" as a substring (REALized) with no float type involved.
+    assert not re.search(r"\bFLOAT\b", sql)
+    assert not re.search(r"\bDOUBLE\b", sql)
+    assert not re.search(r"\bREAL\b", sql)
     for t in EXPECTED_TABLES:
         assert f"CREATE TABLE {t.upper()}" in sql
         assert f"ALTER TABLE {t.upper()} ENABLE ROW LEVEL SECURITY" in sql
