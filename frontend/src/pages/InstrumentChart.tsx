@@ -61,44 +61,55 @@ export default function InstrumentChart({ session, instrument, onBack }: Instrum
 
   return (
     <div>
-      <button onClick={onBack}>&larr; Back to instruments</button>
-      <h2>
+      <button className="btn btn-ghost" style={{ paddingLeft: 0 }} onClick={onBack}>&larr; Back to instruments</button>
+      <h2 className="section-title">
         {instrument.symbol} ({instrument.exchange})
         {dateLabel && `, ${dateLabel} (${displayTimeZone})`}
       </h2>
 
       {hasDevData && <DevDataBanner />}
 
-      <div style={{ marginBottom: 8, display: "flex", gap: 8, alignItems: "center" }}>
-        {(["1D", "5D", "ALL"] as const).map((r) => (
-          <button key={r} onClick={() => setRange(r)} disabled={range === r}>
-            {r}
-          </button>
-        ))}
-        <label style={{ marginLeft: 16 }}>
+      <div className="field-row">
+        <div className="segmented">
+          {(["1D", "5D", "ALL"] as const).map((r) => (
+            <button
+              key={r}
+              className={`segmented-option ${range === r ? "active" : ""}`}
+              onClick={() => setRange(r)}
+              disabled={range === r}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-secondary)" }}>
           <input
             type="checkbox"
             checked={showUtc}
             onChange={(e) => setShowUtc(e.target.checked)}
-          />{" "}
+          />
           Show UTC
         </label>
-        <span style={{ fontSize: 12, color: "#666" }}>({displayTimeZone})</span>
+        <span className="subtle">({displayTimeZone})</span>
         {range === "ALL" && query.isFetching && (
-          <span style={{ fontSize: 12, color: "#666" }}>Loading all history...</span>
+          <span className="subtle">Loading all history...</span>
         )}
       </div>
 
-      {query.isLoading && <p>Loading bars...</p>}
+      {query.isLoading && <p className="subtle">Loading bars...</p>}
       {query.isError && (
-        <p>
+        <p className="error-text">
           {isOversizedRangeError
             ? "This range is too large to request directly. Try a shorter range."
             : `Error loading bars: ${(query.error as Error).message}`}
         </p>
       )}
       {!query.isLoading && !query.isError && bars.length === 0 && <p>No bars in this range.</p>}
-      {bars.length > 0 && <Chart bars={bars} timeZone={displayTimeZone} />}
+      {bars.length > 0 && (
+        <div className="chart-card">
+          <Chart bars={bars} timeZone={displayTimeZone} />
+        </div>
+      )}
     </div>
   );
 }

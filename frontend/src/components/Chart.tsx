@@ -7,6 +7,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { useEffect, useRef } from "react";
+import { useThemeAttr } from "../lib/theme";
 import { formatBarDate, formatBarTime } from "../lib/time";
 import type { Bar } from "../types";
 
@@ -17,18 +18,20 @@ interface ChartProps {
   timeZone: string;
 }
 
-// Matches lightweight-charts' own candlestick defaults -- set explicitly (not left
-// implicit) so the volume bars below can use the exact same colors, keyed off the
-// same up/down test as the candles.
-const UP_COLOR = "#26a69a";
-const DOWN_COLOR = "#ef5350";
+// Up/down colors (styling only -- lightweight-charts' own defaults were teal/red;
+// these match the app's orange/pink accent pair instead). Volume bars below reuse
+// the exact same colors, keyed off the same up/down test as the candles.
+const UP_COLOR = "#f2a93b";
+const DOWN_COLOR = "#ec4a93";
 
 export default function Chart({ bars, timeZone }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const theme = useThemeAttr();
 
   useEffect(() => {
     if (!containerRef.current) return;
+    const isLight = theme === "light";
 
     const chart = createChart(containerRef.current, {
       autoSize: true,
@@ -36,7 +39,15 @@ export default function Chart({ bars, timeZone }: ChartProps) {
       // built-in TradingView logo satisfies that requirement by itself (see the
       // library's own typings.d.ts on this option). Set explicitly, even though
       // true is already the default, so it's never accidentally turned off.
-      layout: { attributionLogo: true },
+      layout: {
+        attributionLogo: true,
+        background: { color: "transparent" },
+        textColor: isLight ? "#5c5478" : "#a79fc4",
+      },
+      grid: {
+        vertLines: { color: isLight ? "rgba(27,16,48,0.06)" : "rgba(255,255,255,0.06)" },
+        horzLines: { color: isLight ? "rgba(27,16,48,0.06)" : "rgba(255,255,255,0.06)" },
+      },
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
@@ -89,7 +100,7 @@ export default function Chart({ bars, timeZone }: ChartProps) {
       chart.remove();
       chartRef.current = null;
     };
-  }, [bars, timeZone]);
+  }, [bars, timeZone, theme]);
 
   return <div ref={containerRef} style={{ width: "100%", height: 500 }} />;
 }

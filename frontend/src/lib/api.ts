@@ -14,9 +14,58 @@ import type {
   WatchlistRow,
 } from "../types";
 
-async function _errorFor(res: Response): Promise<Error> {
-  const detail = await res.json().catch(() => null);
-  return new Error(`API ${res.status}${detail?.detail ? `: ${detail.detail}` : ""}`);
+// Carries the RAW `detail` from the response body (string, object, array, or
+// absent) alongside an always-safe `.message` string, so a caller that just
+// shows `.message` can never render "[object Object]", while a caller that
+// wants to interpret a specific error shape (e.g. StrategyLab.tsx's
+// "all_instruments_blocked") can read `.detail` for the real structure.
+export class ApiError extends Error {
+  status: number;
+  detail: unknown;
+
+  constructor(status: number, detail: unknown, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+// Depth-capped on purpose: this only ever has to flatten small JSON error
+// bodies (a FastAPI validation-error list, or an unexpected object shape),
+// never arbitrary app data.
+function extractStrings(value: unknown, depth = 0): string[] {
+  if (depth > 4) return [];
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap((v) => extractStrings(v, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).flatMap((v) => extractStrings(v, depth + 1));
+  }
+  return [];
+}
+
+async function _errorFor(res: Response): Promise<ApiError> {
+  const body = await res.json().catch(() => null);
+  const detail = body?.detail;
+
+  let message: string;
+  if (typeof detail === "string") {
+    message = `API ${res.status}: ${detail}`;
+  } else if (detail !== undefined && detail !== null) {
+    // Never template-literal an object/array straight into the message --
+    // that stringifies to "[object Object]". Pull out whatever plain-text
+    // pieces it contains instead; a caller that understands this specific
+    // error's shape (e.g. StrategyLab.tsx) should read `.detail` directly
+    // rather than relying on this generic fallback text.
+    const strings = extractStrings(detail).map((s) => s.trim()).filter(Boolean);
+    message = strings.length > 0
+      ? `Request failed (${res.status}): ${strings.join(", ")}`
+      : `Request failed (${res.status})`;
+  } else {
+    message = `API ${res.status}`;
+  }
+
+  return new ApiError(res.status, detail, message);
 }
 
 export async function apiFetch<T>(path: string, token: string): Promise<T> {

@@ -17,11 +17,11 @@ export default function DemoBanner() {
   return (
     <div
       style={{
-        background: "#b02a37",
+        background: "linear-gradient(135deg, #e8485f, #c23652)",
         color: "white",
         padding: "8px 16px",
         textAlign: "center",
-        fontWeight: 600,
+        fontWeight: 700,
         fontSize: 13,
       }}
     >

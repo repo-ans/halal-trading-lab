@@ -1,0 +1,585 @@
+/* Design tokens. Dark is the default; [data-theme="light"] on <html> overrides.
+   Palette inspired by the reference: deep purple/navy gradient, glass cards,
+   pill nav/buttons, orange + pink + teal accent trio. */
+:root {
+  --bg-base: #0f0a1f;
+  --bg-gradient:
+    radial-gradient(ellipse 80% 50% at 15% -10%, rgba(124, 58, 207, 0.32), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 100% 20%, rgba(236, 72, 153, 0.16), transparent 60%),
+    radial-gradient(ellipse 80% 60% at 50% 120%, rgba(67, 31, 110, 0.4), transparent 60%),
+    linear-gradient(160deg, #1b1230 0%, #130c24 45%, #1a0f2d 100%);
+
+  --surface: rgba(255, 255, 255, 0.045);
+  --surface-strong: rgba(20, 13, 36, 0.65);
+  --surface-hover: rgba(255, 255, 255, 0.075);
+  --surface-solid: #1c1430;
+
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  --text-primary: #f4f2fb;
+  --text-secondary: #a79fc4;
+  --text-muted: #746b93;
+  --text-on-accent: #1b1030;
+
+  --accent-orange: #f2a93b;
+  --accent-orange-strong: #e8911a;
+  --accent-pink: #ec4a93;
+  --accent-teal: #2bd9a8;
+  --accent-red: #f2617a;
+
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-pill: 999px;
+
+  --shadow-card: 0 8px 30px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 12px 40px rgba(0, 0, 0, 0.45);
+
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+:root[data-theme="light"] {
+  --bg-base: #f1eefb;
+  --bg-gradient:
+    radial-gradient(ellipse 80% 50% at 15% -10%, rgba(165, 120, 240, 0.16), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 100% 10%, rgba(236, 72, 153, 0.09), transparent 60%),
+    linear-gradient(160deg, #f7f5fd 0%, #ece7f9 55%, #f3eefb 100%);
+
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-strong: rgba(255, 255, 255, 0.82);
+  --surface-hover: rgba(255, 255, 255, 0.95);
+  --surface-solid: #ffffff;
+
+  --border: rgba(27, 16, 48, 0.09);
+  --border-strong: rgba(27, 16, 48, 0.16);
+
+  --text-primary: #1b1030;
+  --text-secondary: #5c5478;
+  --text-muted: #8982a3;
+  /* .btn-primary's background IS --text-primary, so this must always be
+     whatever contrasts with THAT -- dark theme's --text-primary is near-white
+     (needs dark text on it), light theme's is dark navy (needs light text). */
+  --text-on-accent: #f4f2fb;
+
+  --shadow-card: 0 8px 24px rgba(90, 60, 150, 0.1);
+  --shadow-pop: 0 16px 40px rgba(90, 60, 150, 0.16);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-gradient);
+  background-color: var(--bg-base);
+  background-attachment: fixed;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 {
+  margin: 0;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+a {
+  color: var(--accent-pink);
+}
+
+p {
+  color: var(--text-secondary);
+}
+
+button, input, select, textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+/* --- layout shell --- */
+
+.app-shell {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px 20px 48px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 10px 10px 10px 20px;
+  backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-card);
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.brand-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent-orange), var(--accent-pink));
+  flex: none;
+}
+
+.nav-pills {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.nav-pill {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 9px 16px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+
+.nav-pill:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.nav-pill:disabled {
+  background: var(--surface-solid);
+  color: var(--text-primary);
+  cursor: default;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 15px;
+  transition: background 0.15s ease, color 0.15s ease;
+  flex: none;
+}
+
+.icon-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+/* --- cards --- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  backdrop-filter: blur(16px);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 20px;
+}
+
+.card-tight {
+  padding: 14px 16px;
+}
+
+.card-title {
+  font-size: 16px;
+  margin-bottom: 12px;
+}
+
+.section-title {
+  font-size: 15px;
+  color: var(--text-primary);
+  margin: 4px 0 12px;
+}
+
+.subtle {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* --- stat tiles (Dashboard metrics) --- */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.stat-tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+}
+
+.stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.stat-caption {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.positive { color: var(--accent-teal); }
+.negative { color: var(--accent-red); }
+
+/* --- buttons --- */
+
+.btn {
+  appearance: none;
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.1s ease, opacity 0.15s ease, background 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.btn-primary {
+  background: var(--text-primary);
+  color: var(--text-on-accent);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #ffffff;
+}
+
+:root[data-theme="light"] .btn-primary:hover:not(:disabled) {
+  background: #000000;
+  color: #ffffff;
+}
+
+.btn-accent {
+  background: linear-gradient(135deg, var(--accent-orange), var(--accent-pink));
+  color: #1b1030;
+}
+
+.btn-secondary {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 8px 14px;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.btn-sm {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+/* --- segmented control (e.g. AI summary mode) --- */
+
+.segmented {
+  display: inline-flex;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 4px;
+  gap: 2px;
+}
+
+.segmented-option {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.segmented-option.active {
+  background: var(--text-primary);
+  color: var(--text-on-accent);
+}
+
+/* --- forms --- */
+
+input, select, textarea {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+input::placeholder {
+  color: var(--text-muted);
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent-orange);
+  box-shadow: 0 0 0 3px rgba(242, 169, 59, 0.18);
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent-orange);
+  width: auto;
+}
+
+/* The closed <select> picks up the rules above fine, but the native dropdown
+   POPUP's <option> list is a separate, OS-rendered surface in most browsers --
+   it ignores a color/background set only on <select> and falls back to a
+   light system default, which made dark-mode option text unreadable (near-
+   white text on that default-white popup). Setting it explicitly here is the
+   fix; it's honored by Chromium/Firefox/Edge even though the popup otherwise
+   sits outside normal CSS cascade/theming. */
+select {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] select {
+  color-scheme: light;
+}
+
+option {
+  background: var(--surface-solid);
+  color: var(--text-primary);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+/* --- tables --- */
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+table.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.data-table thead th {
+  text-align: left;
+  padding: 12px 14px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.data-table tbody td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.data-table tbody tr.clickable {
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.data-table tbody tr.clickable:hover {
+  background: var(--surface-hover);
+}
+
+/* --- badges --- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.badge-success { background: rgba(43, 217, 168, 0.16); color: var(--accent-teal); }
+.badge-warning { background: rgba(242, 169, 59, 0.16); color: var(--accent-orange); }
+.badge-danger { background: rgba(242, 97, 122, 0.16); color: var(--accent-red); }
+.badge-neutral { background: var(--surface); color: var(--text-secondary); border: 1px solid var(--border); }
+
+/* --- banners --- */
+
+.banner {
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  border: 1px solid transparent;
+}
+
+.banner-danger {
+  background: rgba(242, 97, 122, 0.14);
+  color: var(--accent-red);
+  border-color: rgba(242, 97, 122, 0.3);
+}
+
+.banner-warning {
+  background: rgba(242, 169, 59, 0.14);
+  color: var(--accent-orange);
+  border-color: rgba(242, 169, 59, 0.3);
+}
+
+/* --- login --- */
+
+.login-shell {
+  min-height: calc(100vh - 40px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+}
+
+/* --- misc --- */
+
+.disclaimer {
+  margin-top: 32px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.error-text {
+  color: var(--accent-red);
+  font-size: 13px;
+}
+
+.success-text {
+  color: var(--accent-teal);
+  font-size: 13px;
+}
+
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 8px 8px 0;
+  backdrop-filter: blur(16px);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 16px;
+}

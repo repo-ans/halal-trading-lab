@@ -15,16 +15,17 @@ export default function RunPicker({ token, selectedRunId, onSelect }: RunPickerP
     queryFn: () => fetchStrategyRuns(token, { limit: 100 }),
   });
 
-  if (query.isLoading) return <p>Loading your runs...</p>;
-  if (query.isError) return <p>Error loading runs: {(query.error as Error).message}</p>;
+  if (query.isLoading) return <p className="subtle">Loading your runs...</p>;
+  if (query.isError) return <p className="error-text">Error loading runs: {(query.error as Error).message}</p>;
 
   const runs = query.data?.items ?? [];
-  if (runs.length === 0) return <p>You haven't run a strategy yet -- start one in Strategy Lab.</p>;
+  if (runs.length === 0) return <p className="subtle">You haven't run a strategy yet -- start one in Strategy Lab.</p>;
 
   return (
     <select
       value={selectedRunId ?? ""}
       onChange={(e) => onSelect(e.target.value ? Number(e.target.value) : null)}
+      style={{ minWidth: 260 }}
     >
       <option value="">Select a run...</option>
       {runs.map((r) => (

@@ -1,12 +1,55 @@
 import type { Session } from "@supabase/supabase-js";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { createStrategyRun, fetchInstruments, fetchWatchlist, postPaperRun } from "../lib/api";
+import { ApiError, createStrategyRun, fetchInstruments, fetchWatchlist, postPaperRun } from "../lib/api";
 import type { WatchlistRow } from "../types";
 
 interface StrategyLabProps {
   session: Session;
   onRunReady: (runId: number) => void;
+  onGoToWatchlist: () => void;
+}
+
+// One shared map for every instrument-blocking reason this screen can show --
+// both the "all instruments blocked" error case below and the partial-block
+// list on a successful run use the exact same wording for the exact same
+// codes, so the two can never silently say something different. No backend
+// equivalent exists for these specific codes (unlike app/services/
+// rejection_messages.py's paper-order reasons), so this is the one source.
+const BLOCK_REASON_LABELS: Record<string, string> = {
+  no_record: "no halal record yet",
+  not_halal: "marked not halal",
+  doubtful: "marked doubtful",
+  not_covered: "not covered by halal screening",
+  expired: "halal record has expired",
+  licence_restricted: "price data not yet licensed for display",
+};
+
+function blockReasonLabel(reason: string): string {
+  return BLOCK_REASON_LABELS[reason] ?? reason;
+}
+
+interface InstrumentLookup {
+  get(id: number): { symbol: string } | undefined;
+}
+
+function instrumentLabel(id: string, instrumentsById: InstrumentLookup): string {
+  return instrumentsById.get(Number(id))?.symbol ?? `instrument ${id}`;
+}
+
+// Pure, exported for testing: the backend's 422 for an all-instruments-
+// -blocked run sends the full StrategyRunOut object as `detail` (never a
+// plain string) -- this is the one place that shape is interpreted, so the
+// generic api.ts error-message fallback never has to know about it, and a
+// test can assert this directly without mounting the whole page.
+export function blockedInstrumentsFromError(error: unknown): Record<string, string> | null {
+  if (!(error instanceof ApiError)) return null;
+  const detail = error.detail;
+  if (detail === null || typeof detail !== "object" || Array.isArray(detail)) return null;
+  const d = detail as Record<string, unknown>;
+  if (d.error !== "all_instruments_blocked") return null;
+  if (d.blocked_instruments === null || typeof d.blocked_instruments !== "object") return null;
+  return d.blocked_instruments as Record<string, string>;
 }
 
 // Defaults match CLAUDE.md's assumptions exactly -- shown as editable, labeled
@@ -27,7 +70,7 @@ function todayIso(offsetDays: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-export default function StrategyLab({ session, onRunReady }: StrategyLabProps) {
+export default function StrategyLab({ session, onRunReady, onGoToWatchlist }: StrategyLabProps) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [rangeStart, setRangeStart] = useState(todayIso(-7));
   const [rangeEnd, setRangeEnd] = useState(todayIso(0));
@@ -86,7 +129,9 @@ export default function StrategyLab({ session, onRunReady }: StrategyLabProps) {
   });
 
   const run = createRun.data;
-  const allBlocked = run?.status === "failed" && run?.error === "all_instruments_blocked";
+  const allBlockedReasons = createRun.isError
+    ? blockedInstrumentsFromError(createRun.error)
+    : null;
 
   function toggle(id: number) {
     setSelected((prev) => {
@@ -97,119 +142,139 @@ export default function StrategyLab({ session, onRunReady }: StrategyLabProps) {
     });
   }
 
-  if (watchlist.isLoading || instruments.isLoading) return <p>Loading watchlist...</p>;
-  if (watchlist.isError) return <p>Error loading watchlist: {(watchlist.error as Error).message}</p>;
-  if (instruments.isError) return <p>Error loading instruments: {(instruments.error as Error).message}</p>;
+  if (watchlist.isLoading || instruments.isLoading) return <p className="subtle">Loading watchlist...</p>;
+  if (watchlist.isError) return <p className="error-text">Error loading watchlist: {(watchlist.error as Error).message}</p>;
+  if (instruments.isError) return <p className="error-text">Error loading instruments: {(instruments.error as Error).message}</p>;
 
   const rows: WatchlistRow[] = watchlist.data ?? [];
+  const instrumentsById = new Map((instruments.data ?? []).map((i) => [i.id, i]));
 
   return (
     <div>
-      <h2>Strategy Lab</h2>
-      <p style={{ fontSize: 12, color: "#666" }}>
+      <h2 className="section-title">Strategy Lab</h2>
+      <p className="subtle" style={{ marginBottom: 16 }}>
         Simulated backtest only -- paper trading, not financial advice.
       </p>
 
-      <h3>1. Pick instruments from your watchlist</h3>
-      <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: 16 }}>
-        <thead>
-          <tr>
-            <th></th>
-            <th style={{ textAlign: "left" }}>Symbol</th>
-            <th style={{ textAlign: "left" }}>Gate status</th>
-            <th style={{ textAlign: "left" }}>Last close</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => {
-            const lastClose = r.latest_close ? Number(r.latest_close) : null;
-            const capExceeded = lastClose !== null && lastClose >= Number(maxPositionValue);
-            return (
-              <tr key={r.id}>
-                <td>
-                  <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} />
-                </td>
-                <td>{r.symbol}</td>
-                <td>{r.blocking_reason ?? "ok"}</td>
-                <td>
-                  {r.latest_close_restricted ? "restricted (unlicensed source)" : r.latest_close ?? "--"}
-                  {capExceeded && (
-                    <span style={{ color: "#b02a37", marginLeft: 8 }}>
-                      one share costs more than the position cap: no trades will happen
-                    </span>
-                  )}
-                </td>
+      <div className="card">
+        <h3 className="card-title">1. Pick instruments from your watchlist</h3>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th></th>
+                <th>Symbol</th>
+                <th>Gate status</th>
+                <th>Last close</th>
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
-
-      <h3>2. Run parameters (assumptions -- edit freely)</h3>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, auto)", gap: 8, marginBottom: 16 }}>
-        <label>Range start <input type="date" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} /></label>
-        <label>Range end <input type="date" value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} /></label>
-        <label>Fast period <input type="number" value={fastPeriod} onChange={(e) => setFastPeriod(Number(e.target.value))} /></label>
-        <label>Slow period <input type="number" value={slowPeriod} onChange={(e) => setSlowPeriod(Number(e.target.value))} /></label>
-        <label>Starting cash <input value={startingCash} onChange={(e) => setStartingCash(e.target.value)} /></label>
-        <label>Max position value <input value={maxPositionValue} onChange={(e) => setMaxPositionValue(e.target.value)} /></label>
-        <label>Commission/order <input value={commission} onChange={(e) => setCommission(e.target.value)} /></label>
-        <label>Spread (bps) <input value={spreadBps} onChange={(e) => setSpreadBps(e.target.value)} /></label>
-        <label>Slippage (bps) <input value={slippageBps} onChange={(e) => setSlippageBps(e.target.value)} /></label>
-        <label>
-          <input type="checkbox" checked={resetMaEachSession} onChange={(e) => setResetMaEachSession(e.target.checked)} />{" "}
-          Reset MA each session
-        </label>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const lastClose = r.latest_close ? Number(r.latest_close) : null;
+                const capExceeded = lastClose !== null && lastClose >= Number(maxPositionValue);
+                return (
+                  <tr key={r.id}>
+                    <td>
+                      <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} />
+                    </td>
+                    <td>{r.symbol}</td>
+                    <td>
+                      <span className={`badge ${r.blocking_reason ? "badge-danger" : "badge-success"}`}>
+                        {r.blocking_reason ?? "ok"}
+                      </span>
+                    </td>
+                    <td>
+                      {r.latest_close_restricted ? "restricted (unlicensed source)" : r.latest_close ?? "--"}
+                      {capExceeded && (
+                        <span className="error-text" style={{ marginLeft: 8 }}>
+                          one share costs more than the position cap: no trades will happen
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      <button disabled={selected.size === 0 || createRun.isPending} onClick={() => createRun.mutate()}>
-        {createRun.isPending ? "Running..." : "Run strategy"}
-      </button>
+      <div className="card">
+        <h3 className="card-title">2. Run parameters (assumptions -- edit freely)</h3>
+        <div className="form-grid">
+          <label className="field">Range start <input type="date" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} /></label>
+          <label className="field">Range end <input type="date" value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} /></label>
+          <label className="field">Fast period <input type="number" value={fastPeriod} onChange={(e) => setFastPeriod(Number(e.target.value))} /></label>
+          <label className="field">Slow period <input type="number" value={slowPeriod} onChange={(e) => setSlowPeriod(Number(e.target.value))} /></label>
+          <label className="field">Starting cash <input value={startingCash} onChange={(e) => setStartingCash(e.target.value)} /></label>
+          <label className="field">Max position value <input value={maxPositionValue} onChange={(e) => setMaxPositionValue(e.target.value)} /></label>
+          <label className="field">Commission/order <input value={commission} onChange={(e) => setCommission(e.target.value)} /></label>
+          <label className="field">Spread (bps) <input value={spreadBps} onChange={(e) => setSpreadBps(e.target.value)} /></label>
+          <label className="field">Slippage (bps) <input value={slippageBps} onChange={(e) => setSlippageBps(e.target.value)} /></label>
+          <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <input type="checkbox" checked={resetMaEachSession} onChange={(e) => setResetMaEachSession(e.target.checked)} />
+            Reset MA each session
+          </label>
+        </div>
 
-      {createRun.isError && <p style={{ color: "#b02a37" }}>{(createRun.error as Error).message}</p>}
+        <button className="btn btn-accent" disabled={selected.size === 0 || createRun.isPending} onClick={() => createRun.mutate()}>
+          {createRun.isPending ? "Running..." : "Run strategy"}
+        </button>
 
-      {run && (
-        <div style={{ marginTop: 16 }}>
-          {allBlocked ? (
-            <div>
-              <p style={{ color: "#b02a37" }}>
-                Simulated result: every selected instrument was blocked. Nothing was run.
+        {createRun.isError && (
+          allBlockedReasons ? (
+            <div className="banner banner-danger" style={{ marginTop: 12, marginBottom: 0 }}>
+              <p style={{ marginTop: 0, marginBottom: 8 }}>
+                No trades were run. All selected instruments are blocked:
               </p>
-              <ul>
-                {Object.entries(run.blocked_instruments).map(([id, reason]) => (
-                  <li key={id}>instrument {id}: {reason}</li>
+              <ul style={{ margin: "0 0 10px" }}>
+                {Object.entries(allBlockedReasons).map(([id, reason]) => (
+                  <li key={id}>
+                    {instrumentLabel(id, instrumentsById)}: {blockReasonLabel(reason)}
+                  </li>
                 ))}
               </ul>
+              <button className="btn btn-secondary btn-sm" onClick={onGoToWatchlist}>
+                Go to Watchlist to add a record
+              </button>
             </div>
           ) : (
-            <div>
-              <p>Simulated result: run #{run.id} created.</p>
-              {Object.keys(run.blocked_instruments).length > 0 && (
-                <div>
-                  <p>Blocked (no signals generated for these):</p>
-                  <ul>
-                    {Object.entries(run.blocked_instruments).map(([id, reason]) => (
-                      <li key={id}>instrument {id}: {reason}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {!paperRun.data && !paperRun.isError && (
-                <button disabled={paperRun.isPending} onClick={() => paperRun.mutate(run.id)}>
-                  {paperRun.isPending ? "Running paper engine..." : "Run paper engine"}
-                </button>
-              )}
-              {paperRun.isError && (
-                <div>
-                  <p style={{ color: "#b02a37" }}>
-                    Paper engine failed: {(paperRun.error as Error).message}
-                  </p>
-                  <button onClick={() => paperRun.mutate(run.id)}>Retry paper engine</button>
-                </div>
-              )}
-              {paperRun.data && <p>Paper engine complete -- {paperRun.data.order_count} order(s).</p>}
-            </div>
-          )}
+            <p className="error-text">{(createRun.error as ApiError).message}</p>
+          )
+        )}
+      </div>
+
+      {run && (
+        <div className="card">
+          <div>
+            <p style={{ marginTop: 0 }}>Simulated result: run #{run.id} created.</p>
+            {Object.keys(run.blocked_instruments).length > 0 && (
+              <div>
+                <p>Blocked (no signals generated for these):</p>
+                <ul>
+                  {Object.entries(run.blocked_instruments).map(([id, reason]) => (
+                    <li key={id}>
+                      {instrumentLabel(id, instrumentsById)}: {blockReasonLabel(reason)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {!paperRun.data && !paperRun.isError && (
+              <button className="btn btn-primary" disabled={paperRun.isPending} onClick={() => paperRun.mutate(run.id)}>
+                {paperRun.isPending ? "Running paper engine..." : "Run paper engine"}
+              </button>
+            )}
+            {paperRun.isError && (
+              <div>
+                <p className="error-text">
+                  Paper engine failed: {(paperRun.error as Error).message}
+                </p>
+                <button className="btn btn-secondary" onClick={() => paperRun.mutate(run.id)}>Retry paper engine</button>
+              </div>
+            )}
+            {paperRun.data && <p>Paper engine complete -- {paperRun.data.order_count} order(s).</p>}
+          </div>
         </div>
       )}
     </div>

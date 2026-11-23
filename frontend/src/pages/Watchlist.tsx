@@ -12,9 +12,6 @@ interface WatchlistProps {
   onSelect: (instrument: Instrument) => void;
 }
 
-const th = { textAlign: "left" as const, borderBottom: "2px solid #ccc", padding: "6px 10px" };
-const td = { borderBottom: "1px solid #eee", padding: "6px 10px" };
-
 export default function Watchlist({ session, isAdmin, onSelect }: WatchlistProps) {
   const watchlistQuery = useQuery({
     queryKey: ["watchlist"],
@@ -41,7 +38,7 @@ export default function Watchlist({ session, isAdmin, onSelect }: WatchlistProps
 
   return (
     <div>
-      <h2>Watchlist</h2>
+      <h2 className="section-title">Watchlist</h2>
 
       {isAdmin ? (
         <>
@@ -49,59 +46,61 @@ export default function Watchlist({ session, isAdmin, onSelect }: WatchlistProps
           <CsvImport token={session.access_token} />
         </>
       ) : (
-        <p style={{ fontSize: 12, color: "#666" }}>
+        <p className="subtle">
           Read-only -- compliance edits require an admin account.
         </p>
       )}
 
-      <table style={{ borderCollapse: "collapse", width: "100%" }}>
-        <thead>
-          <tr>
-            <th style={th}>Symbol</th>
-            <th style={th}>Exchange</th>
-            <th style={th}>Status</th>
-            <th style={th}>Last checked</th>
-            <th style={th}>Expires</th>
-            <th style={th}>Evidence</th>
-            <th style={th}>Data timestamp</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const instrument = instrumentsById.get(row.id);
-            return (
-              <tr
-                key={row.id}
-                onClick={() => instrument && onSelect(instrument)}
-                style={{ cursor: instrument ? "pointer" : "default" }}
-              >
-                <td style={td}>{row.symbol}</td>
-                <td style={td}>{row.exchange}</td>
-                <td style={td}>
-                  <ComplianceBadge row={row} />
-                </td>
-                <td style={td}>{row.last_checked_at ?? "—"}</td>
-                <td style={td}>{row.expires_at ?? "—"}</td>
-                <td style={td}>
-                  {row.evidence_url ? (
-                    <a
-                      href={row.evidence_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      View
-                    </a>
-                  ) : (
-                    "—"
-                  )}
-                </td>
-                <td style={td}>{row.latest_bar_ts ?? "—"}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Exchange</th>
+              <th>Status</th>
+              <th>Last checked</th>
+              <th>Expires</th>
+              <th>Evidence</th>
+              <th>Data timestamp</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const instrument = instrumentsById.get(row.id);
+              return (
+                <tr
+                  key={row.id}
+                  onClick={() => instrument && onSelect(instrument)}
+                  className={instrument ? "clickable" : ""}
+                >
+                  <td>{row.symbol}</td>
+                  <td>{row.exchange}</td>
+                  <td>
+                    <ComplianceBadge row={row} />
+                  </td>
+                  <td>{row.last_checked_at ?? "—"}</td>
+                  <td>{row.expires_at ?? "—"}</td>
+                  <td>
+                    {row.evidence_url ? (
+                      <a
+                        href={row.evidence_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        View
+                      </a>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td>{row.latest_bar_ts ?? "—"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

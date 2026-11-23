@@ -30,7 +30,7 @@ export default function AiSummaryPanel({ token, runId, paperEngineHasRun }: AiSu
   if (!paperEngineHasRun) {
     return (
       <div>
-        <h3>AI summary</h3>
+        <h3 className="card-title">AI summary</h3>
         <p>Run the paper engine first to generate a summary.</p>
       </div>
     );
@@ -40,42 +40,48 @@ export default function AiSummaryPanel({ token, runId, paperEngineHasRun }: AiSu
 
   return (
     <div>
-      <h3>AI summary</h3>
+      <h3 className="card-title">AI summary</h3>
 
-      <div style={{ display: "flex", gap: 16, marginBottom: 8 }}>
-        <label>
-          <input
-            type="radio"
-            name="ai-summary-mode"
-            checked={mode === "template"}
-            onChange={() => setMode("template")}
-          />{" "}
-          Automatic (no AI) -- sends nothing
-        </label>
-        <label>
-          <input
-            type="radio"
-            name="ai-summary-mode"
-            checked={mode === "llm"}
-            onChange={() => setMode("llm")}
-          />{" "}
-          AI-generated -- sends the numbers above to an external service
-        </label>
+      <div className="segmented" role="radiogroup" style={{ marginBottom: 8 }}>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={mode === "template"}
+          className={`segmented-option ${mode === "template" ? "active" : ""}`}
+          onClick={() => setMode("template")}
+        >
+          Automatic (no AI)
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={mode === "llm"}
+          className={`segmented-option ${mode === "llm" ? "active" : ""}`}
+          onClick={() => setMode("llm")}
+        >
+          AI-generated
+        </button>
       </div>
+      <p className="subtle" style={{ margin: "0 0 4px" }}>
+        Automatic (no AI) -- sends nothing
+      </p>
+      <p className="subtle" style={{ margin: "0 0 12px" }}>
+        AI-generated -- sends the numbers above to an external service
+      </p>
 
       {stored.isLoading && <p>Checking for an existing summary...</p>}
-      {stored.isError && <p>Error: {(stored.error as Error).message}</p>}
+      {stored.isError && <p className="error-text">Error: {(stored.error as Error).message}</p>}
 
-      <button disabled={generate.isPending} onClick={() => generate.mutate()}>
+      <button className="btn btn-secondary" disabled={generate.isPending} onClick={() => generate.mutate()}>
         {generate.isPending ? "Generating..." : report ? "Regenerate" : "Generate summary"}
       </button>
-      {generate.isError && <p style={{ color: "#b02a37" }}>{(generate.error as Error).message}</p>}
+      {generate.isError && <p className="error-text">{(generate.error as Error).message}</p>}
 
       {report && (
-        <div style={{ marginTop: 12, border: "1px solid #ddd", borderRadius: 6, padding: 12 }}>
-          <h4 style={{ marginTop: 0 }}>{report.heading}</h4>
+        <div className="card card-tight" style={{ marginTop: 14, marginBottom: 0 }}>
+          <h4 style={{ marginTop: 0, marginBottom: 8 }}>{report.heading}</h4>
           {report.fallback_occurred && (
-            <p style={{ fontSize: 12, color: "#666" }}>
+            <p className="subtle">
               AI generation was unavailable or failed -- showing the automatic summary instead.
             </p>
           )}

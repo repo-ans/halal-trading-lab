@@ -39,32 +39,34 @@ export default function Dashboard({ session, runId, onSelectRun }: DashboardProp
 
   return (
     <div>
-      <h2>Dashboard</h2>
-      <p style={{ fontSize: 12, color: "#666" }}>
+      <h2 className="section-title">Dashboard</h2>
+      <p className="subtle" style={{ marginBottom: 16 }}>
         Simulated result -- paper trading only, not financial advice.
       </p>
 
-      <RunPicker token={session.access_token} selectedRunId={runId} onSelect={onSelectRun} />
+      <div className="card">
+        <RunPicker token={session.access_token} selectedRunId={runId} onSelect={onSelectRun} />
+      </div>
 
       {runId === null && <p>Pick a run above to see its metrics.</p>}
       {runId !== null && run.isLoading && <p>Loading run...</p>}
-      {runId !== null && run.isError && <p>Error loading run: {(run.error as Error).message}</p>}
+      {runId !== null && run.isError && <p className="error-text">Error loading run: {(run.error as Error).message}</p>}
 
       {run.data && run.data.status === "failed" && (
-        <p style={{ color: "#b02a37" }}>This run failed: {run.data.error}.</p>
+        <div className="banner banner-danger">This run failed: {run.data.error}.</div>
       )}
 
       {run.data && run.data.status === "completed" && run.data.paper_status === "not_run" && (
-        <div>
-          <p>The paper engine hasn't run yet for this strategy run.</p>
-          <button disabled={runPaperEngine.isPending} onClick={() => runPaperEngine.mutate()}>
+        <div className="card">
+          <p style={{ marginTop: 0 }}>The paper engine hasn't run yet for this strategy run.</p>
+          <button className="btn btn-primary" disabled={runPaperEngine.isPending} onClick={() => runPaperEngine.mutate()}>
             {runPaperEngine.isPending ? "Running..." : "Run paper engine"}
           </button>
         </div>
       )}
 
       {metrics.isLoading && run.data?.paper_status === "completed" && <p>Loading metrics...</p>}
-      {metrics.isError && <p>Error loading metrics: {(metrics.error as Error).message}</p>}
+      {metrics.isError && <p className="error-text">Error loading metrics: {(metrics.error as Error).message}</p>}
 
       {metrics.data && (
         <div>
@@ -73,17 +75,17 @@ export default function Dashboard({ session, runId, onSelectRun }: DashboardProp
           )}
 
           {metrics.data.unresolved_positions > 0 && (
-            <p style={{ color: "#b02a37" }}>
+            <div className="banner banner-danger">
               {metrics.data.unresolved_positions} position(s) could not be closed due to missing
               data: {metrics.data.unresolved_instrument_ids
                 .map((id) => instrumentsById.get(id)?.symbol ?? id)
                 .join(", ")}
-            </p>
+            </div>
           )}
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
-            <Metric label="Total return" value={pct(metrics.data.total_return)} />
-            <Metric label="Realized P&L" value={money(metrics.data.realized_pnl)} />
+          <div className="stat-grid">
+            <Metric label="Total return" value={pct(metrics.data.total_return)} sign={metrics.data.total_return} />
+            <Metric label="Realized P&L" value={money(metrics.data.realized_pnl)} sign={metrics.data.realized_pnl} />
             <Metric label="Trades" value={String(metrics.data.trades_count)} />
             <Metric label="Win rate" value={pct(metrics.data.win_rate)} />
             <Metric label="Avg win" value={money(metrics.data.avg_win)} />
@@ -93,31 +95,38 @@ export default function Dashboard({ session, runId, onSelectRun }: DashboardProp
             <Metric label="Max drawdown" value={`${(Number(metrics.data.max_drawdown) * 100).toFixed(2)}%`} />
           </div>
 
-          <h3>Equity curve (realized)</h3>
-          <p style={{ fontSize: 12, color: "#666" }}>
-            This curve only reflects closed (realized) trades -- it does not show gains or
-            losses while a position is still open, and excludes any unresolved position
-            entirely.
-          </p>
-          <EquityCurveChart points={metrics.data.equity_curve} />
+          <div className="card">
+            <h3 className="card-title">Equity curve (realized)</h3>
+            <p className="subtle" style={{ marginTop: -6, marginBottom: 12 }}>
+              This curve only reflects closed (realized) trades -- it does not show gains or
+              losses while a position is still open, and excludes any unresolved position
+              entirely.
+            </p>
+            <EquityCurveChart points={metrics.data.equity_curve} />
+          </div>
 
-          <AiSummaryPanel
-            token={session.access_token}
-            runId={runId as number}
-            paperEngineHasRun={run.data?.paper_status === "completed"}
-          />
+          <div className="card">
+            <AiSummaryPanel
+              token={session.access_token}
+              runId={runId as number}
+              paperEngineHasRun={run.data?.paper_status === "completed"}
+            />
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function Metric({ label, value, caption }: { label: string; value: string; caption?: string }) {
+function Metric({ label, value, caption, sign }: {
+  label: string; value: string; caption?: string; sign?: string | null;
+}) {
+  const signClass = sign == null ? "" : Number(sign) > 0 ? "positive" : Number(sign) < 0 ? "negative" : "";
   return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 6, padding: 12 }}>
-      <div style={{ fontSize: 12, color: "#666" }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 600 }}>{value}</div>
-      {caption && <div style={{ fontSize: 11, color: "#888" }}>{caption}</div>}
+    <div className="stat-tile">
+      <div className="stat-label">{label}</div>
+      <div className={`stat-value ${signClass}`}>{value}</div>
+      {caption && <div className="stat-caption">{caption}</div>}
     </div>
   );
 }

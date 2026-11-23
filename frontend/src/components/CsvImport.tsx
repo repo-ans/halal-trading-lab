@@ -23,61 +23,67 @@ export default function CsvImport({ token }: { token: string }) {
   });
 
   return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 6, padding: 12, marginBottom: 16 }}>
-      <h3 style={{ marginTop: 0 }}>CSV import</h3>
-      <p style={{ fontSize: 12, color: "#666" }}>
+    <div className="card">
+      <h3 className="card-title">CSV import</h3>
+      <p className="subtle">
         Columns: symbol,exchange,status,source,evidence_url,checked_at,expires_at,notes.
         Max 500 rows, 1&nbsp;MB. Unknown instruments are rejected, never created.
       </p>
-      <input
-        type="file"
-        accept=".csv,text/csv"
-        onChange={(e) => {
-          setFile(e.target.files?.[0] ?? null);
-          setDryRunResult(null);
-        }}
-      />{" "}
-      <button
-        type="button"
-        disabled={!file || dryRun.isPending}
-        onClick={() => file && dryRun.mutate(file)}
-      >
-        {dryRun.isPending ? "Checking..." : "Dry run"}
-      </button>
+      <div className="field-row">
+        <input
+          type="file"
+          accept=".csv,text/csv"
+          onChange={(e) => {
+            setFile(e.target.files?.[0] ?? null);
+            setDryRunResult(null);
+          }}
+        />
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          disabled={!file || dryRun.isPending}
+          onClick={() => file && dryRun.mutate(file)}
+        >
+          {dryRun.isPending ? "Checking..." : "Dry run"}
+        </button>
+      </div>
 
       {dryRunResult && (
-        <div style={{ marginTop: 8 }}>
-          <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left" }}>Row</th>
-                <th style={{ textAlign: "left" }}>Symbol</th>
-                <th style={{ textAlign: "left" }}>Result</th>
-              </tr>
-            </thead>
-            <tbody>
-              {dryRunResult.rows.map((r) => (
-                <tr key={r.row_number}>
-                  <td>{r.row_number}</td>
-                  <td>
-                    {r.symbol}/{r.exchange}
-                  </td>
-                  <td style={{ color: r.accepted ? "#0a3622" : "#58151c" }}>
-                    {r.accepted ? "accepted" : r.reason}
-                  </td>
+        <div>
+          <div className="table-wrap" style={{ marginBottom: 12 }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Row</th>
+                  <th>Symbol</th>
+                  <th>Result</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {dryRunResult.rows.map((r) => (
+                  <tr key={r.row_number}>
+                    <td>{r.row_number}</td>
+                    <td>
+                      {r.symbol}/{r.exchange}
+                    </td>
+                    <td className={r.accepted ? "success-text" : "error-text"}>
+                      {r.accepted ? "accepted" : r.reason}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <button
             type="button"
+            className="btn btn-primary btn-sm"
             disabled={!dryRunResult.all_accepted || confirm.isPending || !file}
             onClick={() => file && confirm.mutate(file)}
           >
             {confirm.isPending ? "Applying..." : "Confirm import"}
           </button>
           {!dryRunResult.all_accepted && (
-            <p style={{ color: "#b02a37", fontSize: 12 }}>
+            <p className="error-text" style={{ marginTop: 8 }}>
               Fix the rejected rows above before confirming -- a confirm applies all rows or
               none.
             </p>
@@ -85,10 +91,10 @@ export default function CsvImport({ token }: { token: string }) {
         </div>
       )}
       {(dryRun.isError || confirm.isError) && (
-        <p style={{ color: "#b02a37" }}>{((dryRun.error ?? confirm.error) as Error).message}</p>
+        <p className="error-text">{((dryRun.error ?? confirm.error) as Error).message}</p>
       )}
       {confirm.isSuccess && (
-        <p style={{ color: "#0a3622" }}>Imported {confirm.data.applied} rows.</p>
+        <p className="success-text">Imported {confirm.data.applied} rows.</p>
       )}
     </div>
   );

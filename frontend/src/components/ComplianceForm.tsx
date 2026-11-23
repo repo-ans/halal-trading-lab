@@ -47,10 +47,10 @@ export default function ComplianceForm({ token, rows }: ComplianceFormProps) {
         e.preventDefault();
         mutation.mutate();
       }}
-      style={{ border: "1px solid #ddd", borderRadius: 6, padding: 12, marginBottom: 16 }}
+      className="card"
     >
-      <h3 style={{ marginTop: 0 }}>Add compliance record</h3>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+      <h3 className="card-title">Add compliance record</h3>
+      <div className="field-row" style={{ marginBottom: 0 }}>
         <select
           value={instrumentId}
           onChange={(e) => setInstrumentId(e.target.value ? Number(e.target.value) : "")}
@@ -89,16 +89,16 @@ export default function ComplianceForm({ token, rows }: ComplianceFormProps) {
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
         />
-        <label style={{ fontSize: 12 }}>
-          Expires{" "}
+        <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          Expires
           <input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
         </label>
-        <button type="submit" disabled={mutation.isPending}>
+        <button type="submit" className="btn btn-primary btn-sm" disabled={mutation.isPending}>
           {mutation.isPending ? "Saving..." : "Save"}
         </button>
       </div>
       {mutation.isError && (
-        <p style={{ color: "#b02a37" }}>{(mutation.error as Error).message}</p>
+        <p className="error-text">{(mutation.error as Error).message}</p>
       )}
     </form>
   );
