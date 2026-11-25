@@ -1,0 +1,9 @@
+# Production override for the Oracle Cloud VM (CLAUDE.md, "Backend host change").
+# Same backend image as docker-compose.yml, but no dev bind mounts and no --reload:
+# uses the Dockerfile's own CMD (plain uvicorn, no autoreload) and restarts on boot.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend
+services:
+  backend:
+    restart: unless-stopped
+    volumes: []
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
