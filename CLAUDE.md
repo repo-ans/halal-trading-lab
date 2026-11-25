@@ -42,7 +42,7 @@ prices, restricted to a human-approved **halal** watchlist.
 | Frontend | React + Vite + TypeScript + TanStack Query |
 | Charts | **TradingView Lightweight Charts only** |
 | Frontend host | Netlify (free) |
-| Backend host | localhost via Docker Compose first; Render free tier when deployed |
+| Backend host | localhost via Docker Compose first; **Oracle Cloud VM (owner-provided), CEO decision 2026-11-24** -- see note below |
 | CI + cron | GitHub Actions |
 | Tests | pytest + pytest-asyncio |
 
@@ -65,6 +65,17 @@ throwaway, tmpfs-backed database that DB-writing tests run against, so a test
 
 ### Deferred, not rejected
 - LLM for Stage G summaries. Build stages A–F without it.
+
+### Backend host change — Oracle Cloud, not Render — decided 2026-11-24
+The original plan (Render free tier) is **superseded, by direct CEO instruction**:
+the company already has an Oracle Cloud server, and backend deployment goes there
+instead. Nothing else about the backend changes -- it's still the same FastAPI
+container (`backend/Dockerfile` already exists, built Stage A), same in-process
+APScheduler, same GitHub Actions cron pattern for keeping Supabase awake and
+triggering backfill. Only the host changed. Render's free-tier sleep-after-15-
+-minutes gotcha (§12) no longer applies if Oracle's instance runs continuously;
+confirm this with the owner once the server's actual uptime policy is known, and
+update §12 accordingly rather than assuming.
 
 ---
 
