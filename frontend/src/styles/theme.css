@@ -442,6 +442,26 @@ option {
   color: var(--text-secondary);
 }
 
+.field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.field-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--text-secondary);
+  font-size: 10px;
+  line-height: 1;
+  cursor: help;
+  flex: none;
+}
+
 .field-row {
   display: flex;
   flex-wrap: wrap;

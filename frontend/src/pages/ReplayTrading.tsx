@@ -183,7 +183,10 @@ export default function ReplayTrading({ session }: ReplayTradingProps) {
           <h3 className="card-title">Start a session</h3>
           <div className="form-grid">
             <label className="field">
-              Instrument
+              <span className="field-label">
+                Instrument
+                <span className="field-hint" title="Only instruments with a current, non-expired COMPLIANT record can be picked -- the compliance gate blocks everything else (shown in parentheses).">!</span>
+              </span>
               <select value={instrumentId} onChange={(e) => setInstrumentId(e.target.value ? Number(e.target.value) : "")}>
                 <option value="">Choose...</option>
                 {rows.map((r) => (
@@ -194,27 +197,45 @@ export default function ReplayTrading({ session }: ReplayTradingProps) {
               </select>
             </label>
             <label className="field">
-              Trading day
+              <span className="field-label">
+                Trading day
+                <span className="field-hint" title="The past trading day whose real 5-minute bars this session replays, one bar at a time.">!</span>
+              </span>
               <input type="date" value={sessionDay} onChange={(e) => setSessionDay(e.target.value)} />
             </label>
             <label className="field">
-              Starting cash
+              <span className="field-label">
+                Starting cash
+                <span className="field-hint" title="Dummy balance the session starts with. Virtual money only -- never a real brokerage balance.">!</span>
+              </span>
               <input value={startingCash} onChange={(e) => setStartingCash(e.target.value)} />
             </label>
             <label className="field">
-              Max position value
+              <span className="field-label">
+                Max position value
+                <span className="field-hint" title="Per-symbol cap on a single Buy (CLAUDE.md default: CAD $200). A Buy is sized so it can never spend more than this.">!</span>
+              </span>
               <input value={maxPositionValue} onChange={(e) => setMaxPositionValue(e.target.value)} />
             </label>
             <label className="field">
-              Commission/order
+              <span className="field-label">
+                Commission/order
+                <span className="field-hint" title="Flat fee charged on every fill (buy or sell), deducted from cash alongside the trade.">!</span>
+              </span>
               <input value={commission} onChange={(e) => setCommission(e.target.value)} />
             </label>
             <label className="field">
-              Spread (bps)
+              <span className="field-label">
+                Spread (bps)
+                <span className="field-hint" title="Simulated bid-ask spread, in basis points. Half is added to your Buy price and half is subtracted from your Sell price.">!</span>
+              </span>
               <input value={spreadBps} onChange={(e) => setSpreadBps(e.target.value)} />
             </label>
             <label className="field">
-              Slippage (bps)
+              <span className="field-label">
+                Slippage (bps)
+                <span className="field-hint" title="Simulated market impact, in basis points. Always moves your fill price against you (higher on Buy, lower on Sell).">!</span>
+              </span>
               <input value={slippageBps} onChange={(e) => setSlippageBps(e.target.value)} />
             </label>
           </div>
